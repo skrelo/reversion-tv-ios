@@ -1,0 +1,15 @@
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# XcodeGen generates this from project.yml — keep it out of version control
+# so the source of truth stays project.yml. (Remove this line if you prefer
+# to commit the generated project.)
+ReversionTV.xcodeproj/
+
+# SwiftPM
+.swiftpm/
+.build/

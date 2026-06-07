@@ -1,0 +1,35 @@
+---
+description: Keep TV_APP_SPEC.md in sync with implemented behavior
+alwaysApply: true
+---
+
+# Keep the TV spec doc in sync
+
+The cross-platform spec lives at `~/reversion-tv-assets/TV_APP_SPEC.md`. It is
+the source of truth for every TV port (Android, Tizen, Apple TV, …).
+
+## Rule
+
+Whenever you implement or fix behavior/UI that **diverges from, overrides, or
+is not yet covered by** the spec, **update `TV_APP_SPEC.md` in the same pass** so
+the doc never drifts from what ships.
+
+This includes:
+- A user decision that contradicts the spec (e.g. button order, colors,
+  copy). Change the spec to match the decision — don't leave the old value.
+- New behavior the spec doesn't mention yet — add it to the right section.
+- Fixes to focus/d-pad routing, layout, timing, etc. that the spec describes
+  differently than what we built.
+
+## How
+
+1. Edit the relevant section of `TV_APP_SPEC.md` (keep the `(MVP)` / `(Polish)`
+   / `(Platform)` tagging and prose style).
+2. If the change is Apple-TV-specific, record it as a `(Platform)` note inline —
+   do not fork the spec per OS (§14 keeps §1–§12 platform-agnostic).
+3. Mention in the response that the spec was updated.
+
+## Don't
+
+- Don't change app behavior that contradicts the spec and leave the spec stale.
+- Don't silently invent behavior without recording it in the spec.
