@@ -12,6 +12,30 @@ struct RailsView: View {
     /// focused card itself — the deepest responder — so it fires before the
     /// scroll view can eat the press.
     var onUpFromFirstRail: (() -> Void)? = nil
+    /// LEFT from a card in the FIRST column of any rail opens the nav. Fires
+    /// only at column 0 because the nav is disabled-when-closed, so the focus
+    /// engine can't move LEFT and falls back to this handler; inner cards move
+    /// left normally.
+    var onLeftFromFirstColumn: (() -> Void)? = nil
+    /// DOWN from any card: the parent decides the destination column on the next
+    /// rail (remembered column, or 0 on first visit) instead of letting the
+    /// engine pick the geometric same-column (§6.5).
+    var onMoveDownFromCard: ((UUID) -> Void)? = nil
+    /// When false, video cards don't overlay their title on the art (the
+    /// Event-Detail Videos rail shows the title/date below the cover instead,
+    /// so the overlay would duplicate it, §7).
+    var cardsShowArtTitle: Bool = true
+    /// When set, the FIRST card (rail 0, col 0) is marked the default focus of
+    /// this namespace, so focus entering the rails via the engine (e.g. DOWN
+    /// from a search bar) lands on it directly — no geometric "nearest card"
+    /// intermediate that then snaps to index 0. The owner must wrap the rails in
+    /// `.focusScope(namespace)`. Nil = legacy geometric behavior (Home/Detail).
+    var defaultFocusNamespace: Namespace.ID? = nil
+    /// Trailing scroll inset. Home needs a large value so the LAST rail can
+    /// scroll clear of the hero; a single-rail screen (Event Detail) needs a
+    /// SMALL one, else the phantom space lets the scroll view center the only
+    /// rail and push its title above the viewport top (§6.5/§7).
+    var bottomInset: CGFloat = 420
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 44) {
@@ -23,12 +47,23 @@ struct RailsView: View {
                         .padding(.leading, 60)
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 28) {
-                            ForEach(rail.items) { item in
+                            ForEach(Array(rail.items.enumerated()), id: \.element.id) { col, item in
                                 CardView(
                                     item: item,
                                     focus: $focus,
                                     onSelect: { onSelect(item) },
-                                    onMoveUp: index == 0 ? onUpFromFirstRail : nil
+                                    onMoveUp: index == 0 ? onUpFromFirstRail : nil,
+                                    // ONLY the first card of a rail opens the nav
+                                    // on LEFT. onMoveCommand fires on every press
+                                    // (not just at the edge), so inner cards must
+                                    // NOT carry this or LEFT always opens the nav.
+                                    onMoveLeft: col == 0 ? onLeftFromFirstColumn : nil,
+                                    onMoveDown: { onMoveDownFromCard?(item.id) },
+                                    showArtTitle: cardsShowArtTitle
+                                )
+                                .applyDefaultFocus(
+                                    isFirst: index == 0 && col == 0,
+                                    namespace: defaultFocusNamespace
                                 )
                             }
                         }
@@ -46,7 +81,26 @@ struct RailsView: View {
         // Headroom so the FIRST rail's title isn't clipped under the hero
         // when the rails auto-scroll to keep a focused card visible.
         .padding(.top, 72)
-        .padding(.bottom, 80)
+        // Generous trailing space so the LAST rail can scroll DOWN far enough to
+        // clear the hero band — without it the scroll view hits its content end
+        // and parks the last rail too high, clipping its title + card tops on
+        // DOWN. The phantom space gives tvOS room to position the focused last
+        // rail with its header fully visible. Single-rail screens override this
+        // with a small value (see `bottomInset`).
+        .padding(.bottom, bottomInset)
+    }
+}
+
+extension View {
+    /// Marks `self` as the default focus target of `namespace` when `isFirst`,
+    /// otherwise leaves it untouched. Used by `RailsView.defaultFocusNamespace`.
+    @ViewBuilder
+    func applyDefaultFocus(isFirst: Bool, namespace: Namespace.ID?) -> some View {
+        if isFirst, let namespace {
+            prefersDefaultFocus(true, in: namespace)
+        } else {
+            self
+        }
     }
 }
 
@@ -66,6 +120,9 @@ struct CardView: View {
     @FocusState.Binding var focus: HomeFocus?
     let onSelect: () -> Void
     var onMoveUp: (() -> Void)? = nil
+    var onMoveLeft: (() -> Void)? = nil
+    var onMoveDown: (() -> Void)? = nil
+    var showArtTitle: Bool = true
 
     private var isFocused: Bool { focus == .card(item.id) }
 
@@ -78,7 +135,7 @@ struct CardView: View {
         ImageURL.sized(item.media.wordmarkUrl ?? item.media.eventWordmarkUrl, width: ImageURL.cardWidth)
     }
     private var overlayTitle: String {
-        guard !hasBakedPoster, wordmarkURL == nil else { return "" }
+        guard showArtTitle, !hasBakedPoster, wordmarkURL == nil else { return "" }
         return item.isVideo ? item.media.resolvedEventTitle : (item.media.title ?? "")
     }
 
@@ -92,7 +149,12 @@ struct CardView: View {
         .buttonStyle(CardButtonStyle())
         .focused($focus, equals: .card(item.id))
         .onMoveCommand { direction in
-            if direction == .up, let onMoveUp { onMoveUp() }
+            switch direction {
+            case .up: onMoveUp?()
+            case .left: onMoveLeft?()
+            case .down: onMoveDown?()
+            default: break
+            }
         }
     }
 

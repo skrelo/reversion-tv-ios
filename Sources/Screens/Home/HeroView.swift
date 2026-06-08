@@ -39,27 +39,88 @@ struct HeroContentView: View {
     let onPlay: (Int) -> Void
     let onInfo: (Int) -> Void
     let onToggleMyList: (Int) -> Void
+    /// LEFT past the leftmost button (Watch): page the previous slide, or open
+    /// the nav when already on the first slide (§6.4). RIGHT past the rightmost
+    /// button (Info): page the next slide. Both fire ONLY at the edge — moving
+    /// *onto* a button never pages, so Info stays selectable to open detail.
+    let onLeftEdge: () -> Void
+    let onRightEdge: () -> Void
 
     private var current: MediaItem? {
         guard !heroItems.isEmpty else { return nil }
         return heroItems[min(slideIndex, heroItems.count - 1)]
     }
 
+    /// Identity for the crossfading text block — changes per carousel slide
+    /// (expanded) or per spotlight (collapsed), so the slide text dissolves
+    /// like a slideshow while the action row below stays put.
+    private var slideKey: String {
+        if expanded { return "carousel-\(slideIndex)" }
+        return "spot-\(spotlight?.title ?? "")-\(spotlight?.videoTitle ?? "")"
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Color.clear
+
+            // CAROUSEL wordmark — top-CENTER, its own band, NOT grouped with the
+            // bottom meta/action column (matches Android: 9-grid default
+            // `top_center`, sized ~620×190dp; meta + actions sit bottom-left
+            // separately). Crossfades per slide. Only shown in carousel mode when
+            // the event actually has a wordmark; otherwise the title text renders
+            // in the bottom column (see `carouselContent`).
+            if expanded, let event = current, let w = event.wordmarkUrl, !w.isEmpty {
+                carouselWordmark(w)
+                    .id("wm-\(slideIndex)")
+                    .transition(.opacity)
+            }
+
+            // Slide TEXT — crossfades per slide (slideshow). No action row here,
+            // so the focused button isn't recreated mid-transition.
             content
+                .id(slideKey)
+                .transition(.opacity)
                 .padding(.leading, 60)
                 .padding(.trailing, 120)
-                // Lifts the wordmark/meta UP off the first rail header so there's
-                // clear breathing room between the spotlight and "Continue
-                // Watching" (matches Android/Tizen spacing).
-                .padding(.bottom, 88)
+                // Lifts the meta/text UP off the action row (carousel) / first
+                // rail header (spotlight). On the carousel the action row top
+                // sits ~112 pt off the bottom (36 pad + 76 button), so this must
+                // clear that with breathing room between the description and the
+                // buttons (matches Android/Tizen spacing).
+                .padding(.bottom, expanded ? 168 : 88)
+
+            // Action row — STABLE across slides (not keyed), so focus survives
+            // paging. It reads the current event, so its label/targets update
+            // in place.
+            if expanded, let event = current {
+                actionRow(event)
+                    .padding(.leading, 60)
+                    .padding(.bottom, 36)
+            }
+
             if expanded, heroItems.count > 1 {
                 dots.frame(maxWidth: .infinity, alignment: .center).padding(.bottom, 20)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        // Clip to the hero region so a crossfading backdrop/text can't bleed
+        // down behind the rails during a slide transition.
+        .clipped()
+    }
+
+    /// Carousel wordmark, pinned TOP-CENTER (Android default `top_center`).
+    /// Capped to the carousel size (~620×190dp ≈ 1180×320pt at tvOS 1080p
+    /// points) with aspect preserved — wide marks cap on width, stacked marks
+    /// cap on height.
+    private func carouselWordmark(_ w: String) -> some View {
+        VStack(spacing: 0) {
+            RemoteImage(url: ImageURL.sized(w, width: ImageURL.wordmarkWidth), contentMode: .fit)
+                .frame(maxWidth: 1180, maxHeight: 320, alignment: .center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 60)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     @ViewBuilder
@@ -86,11 +147,17 @@ struct HeroContentView: View {
 
     private func carouselContent(_ event: MediaItem) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            titleOrWordmark(wordmark: event.wordmarkUrl, title: event.title ?? "")
+            // No-wordmark fallback: serif title in the bottom-left column (the
+            // wordmark, when present, renders separately top-center).
+            if (event.wordmarkUrl ?? "").isEmpty {
+                Text(event.title ?? "")
+                    .font(.system(size: 60, weight: .heavy, design: .serif))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(2)
+            }
             metaLine(date: event.sessionDate, videoCount: event.videoCount ?? 0)
             tagline(event.tvSubtitle)
             description(Html.strip(event.shortDescription), lines: 3)
-            actionRow(event).padding(.top, 12)
         }
         .frame(maxWidth: 1100, alignment: .leading)
     }
@@ -112,6 +179,7 @@ struct HeroContentView: View {
             }
             .buttonStyle(HeroPillButtonStyle())
             .focused($focus, equals: .heroWatch)
+            .onMoveCommand { if $0 == .left { onLeftEdge() } }
 
             Button(action: { if let id = event.id { onToggleMyList(id) } }) {
                 Image(systemName: isInMyList ? "checkmark" : "plus")
@@ -128,6 +196,7 @@ struct HeroContentView: View {
             }
             .buttonStyle(HeroIconButtonStyle())
             .focused($focus, equals: .heroInfo)
+            .onMoveCommand { if $0 == .right { onRightEdge() } }
         }
     }
 
@@ -146,8 +215,12 @@ struct HeroContentView: View {
     @ViewBuilder
     private func titleOrWordmark(wordmark: String?, title: String) -> some View {
         if let w = wordmark, !w.isEmpty {
+            // Spotlight (collapsed) wordmark — left-aligned in the content
+            // column, sized SMALLER than the carousel mark (Android spotlight
+            // cap ~340×110dp ≈ 680×220pt) so it reads as a header above the
+            // meta/description, not a full takeover.
             RemoteImage(url: ImageURL.sized(w, width: ImageURL.wordmarkWidth), contentMode: .fit)
-                .frame(maxWidth: 720, maxHeight: 180, alignment: .leading)
+                .frame(maxWidth: 680, maxHeight: 220, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(title)
@@ -212,8 +285,10 @@ struct HeroIconButtonStyle: ButtonStyle {
     @Environment(\.isFocused) private var isFocused
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            // Icon buttons (My List / Info) go WHITE on focus — only the
+            // Watch/Continue pill uses gold (§6.4).
             .foregroundStyle(isFocused ? Theme.bg : Theme.text)
-            .background(Circle().fill(isFocused ? Theme.gold : Color.white.opacity(0.16)))
+            .background(Circle().fill(isFocused ? Color.white : Color.white.opacity(0.16)))
             .scaleEffect(isFocused ? 1.06 : 1.0)
             .animation(.easeOut(duration: 0.15), value: isFocused)
     }

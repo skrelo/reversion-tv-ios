@@ -38,6 +38,10 @@ enum ImageURL {
 struct RemoteImage: View {
     let url: URL?
     var contentMode: ContentMode = .fill
+    /// Shown while loading / on failure. Defaults to the navy surface; pass
+    /// `.clear` where a placeholder box would flash (e.g. the pause wordmark,
+    /// which re-renders and would briefly show a navy rectangle).
+    var placeholder: Color = Theme.surface
 
     var body: some View {
         AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.25))) { phase in
@@ -45,9 +49,9 @@ struct RemoteImage: View {
             case .success(let image):
                 image.resizable().aspectRatio(contentMode: contentMode)
             case .failure, .empty:
-                Theme.surface
+                placeholder
             @unknown default:
-                Theme.surface
+                placeholder
             }
         }
     }

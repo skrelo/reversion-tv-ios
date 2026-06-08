@@ -116,10 +116,12 @@ final class HomeViewModel: ObservableObject {
     func enterCatalog(_ type: Catalog) {
         catalog = type
         rails = catalogRails(type)
-        // Meetups lazily uses the full event catalog.
+        // Meetups lazily loads the full event catalog — server-filtered to
+        // in-person/hybrid events (location_type != 'online') via ?type=meetup
+        // so livestreams never leak into the Meetups view (§6.7).
         if type == .meetups, allEvents == nil {
             Task {
-                if let res = try? await ApiClient.shared.events() {
+                if let res = try? await ApiClient.shared.events(type: "meetup") {
                     allEvents = res.items
                     if catalog == .meetups { rails = catalogRails(.meetups) }
                 }

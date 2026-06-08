@@ -16,6 +16,14 @@ struct HomeView: View {
     @State private var navOpen = false
     /// The content element to restore when leaving the nav (RIGHT).
     @State private var lastContentFocus: HomeFocus = .heroWatch
+    /// Per-rail settled-column memory (§6.5). Keyed by `HomeRail.id`. Crossing
+    /// INTO a rail lands on its remembered column if the user has visited it
+    /// before, otherwise column 0 — NOT the geometric same-column the focus
+    /// engine would pick. Updated whenever a card settles.
+    @State private var lastColumnByRail: [String: Int] = [:]
+    /// Rails the user has actually landed on. A rail not in this set defaults to
+    /// column 0 on first entry; a visited rail restores `lastColumnByRail`.
+    @State private var visitedRails: Set<String> = []
 
     private struct AutoKey: Hashable { let expanded: Bool; let index: Int; let count: Int; let focus: HomeFocus? }
 
@@ -40,7 +48,11 @@ struct HomeView: View {
         .task(id: AutoKey(expanded: heroExpanded, index: slideIndex, count: model.heroItems.count, focus: focus)) {
             guard heroExpanded, model.heroItems.count > 1, model.catalog == nil, isHeroFocus(focus) else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            if !Task.isCancelled { slideIndex = (slideIndex + 1) % model.heroItems.count }
+            if !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.45)) {
+                    slideIndex = (slideIndex + 1) % model.heroItems.count
+                }
+            }
         }
         .onChange(of: focus) { oldValue, newValue in handleFocusChange(from: oldValue, to: newValue) }
         .onChange(of: model.loading) { _, isLoading in
@@ -73,6 +85,9 @@ struct HomeView: View {
                 // hero expand/collapse. The nav gradient + content draw on top.
                 HeroBackdropView(url: heroBackdropURL)
                     .frame(height: heroBackdropHeight)
+                    // Clip to the hero band so a crossfading backdrop can't bleed
+                    // edge-to-edge down behind the rails during a slide change.
+                    .clipped()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .ignoresSafeArea()
                     .animation(.easeInOut(duration: 0.32), value: heroExpanded)
@@ -89,7 +104,9 @@ struct HomeView: View {
                         focus: $focus,
                         onPlay: { router.push(.player(videoId: $0)) },
                         onInfo: { router.push(.eventDetail(id: $0, title: currentHeroTitle)) },
-                        onToggleMyList: { model.toggleEventBookmark($0) }
+                        onToggleMyList: { model.toggleEventBookmark($0) },
+                        onLeftEdge: heroLeftEdge,
+                        onRightEdge: heroRightEdge
                     )
                     .frame(height: heroAnchorHeight)
                     .focusSection()
@@ -115,6 +132,11 @@ struct HomeView: View {
                     onSelect: onNavSelect
                 )
                 .focusSection()
+                // Nav is focusable ONLY while open. With it disabled when
+                // closed, LEFT from the content edge can't reach it by
+                // geometry — we open it explicitly (so LEFT from Watch can
+                // choose page-prev vs open-nav). RIGHT returns to content.
+                .disabled(!navOpen)
                 .onMoveCommand { direction in
                     guard navOpen, direction == .right else { return }
                     navOpen = false
@@ -141,7 +163,8 @@ struct HomeView: View {
                     rails: model.rails,
                     focus: $focus,
                     onSelect: onSelectItem,
-                    onUpFromFirstRail: { focus = .heroWatch }
+                    onUpFromFirstRail: bridgeUpToHero,
+                    onLeftFromFirstColumn: openNav
                 )
             }
         }
@@ -169,6 +192,35 @@ struct HomeView: View {
         case .card(let id):
             navOpen = false
             lastContentFocus = newValue!
+            guard let pos = railPosition(for: id) else { break }
+            let railId = model.rails[pos.railIndex].id
+
+            // Did focus cross INTO this rail from a DIFFERENT rail (or the hero)?
+            // Only then do we override the engine's geometric same-column landing
+            // (§6.5). Moving LEFT/RIGHT within a rail must be left alone.
+            let cameFromSameRail: Bool = {
+                if case .card(let oldId) = old, let op = railPosition(for: oldId) {
+                    return model.rails[op.railIndex].id == railId
+                }
+                return false
+            }()
+
+            if !cameFromSameRail {
+                let remembered = visitedRails.contains(railId) ? (lastColumnByRail[railId] ?? 0) : 0
+                let desired = min(remembered, model.rails[pos.railIndex].items.count - 1)
+                if desired != pos.col {
+                    // The engine landed on the wrong (same-as-previous) column.
+                    // Re-assert the remembered/column-0 target on the next
+                    // runloop so it wins; the corrected change finishes setup.
+                    let targetId = model.rails[pos.railIndex].items[desired].id
+                    DispatchQueue.main.async { focus = .card(targetId) }
+                    return
+                }
+            }
+
+            // Settled on the correct column — record it and drive the spotlight.
+            visitedRails.insert(railId)
+            lastColumnByRail[railId] = pos.col
             if let item = railItem(for: id) {
                 spotlight = item.spotlight
                 heroExpanded = false
@@ -180,6 +232,10 @@ struct HomeView: View {
                 heroExpanded = true
                 spotlight = nil
             }
+        case .detailDescription, .searchField, .searchClear:
+            // Event Detail / Search-only focus targets; never occur on Home.
+            // Listed to satisfy exhaustiveness over the shared focus space.
+            break
         case .nav(let id):
             navOpen = true
             // Entering the nav from content lands on the nearest-by-geometry
@@ -248,6 +304,16 @@ struct HomeView: View {
         return nil
     }
 
+    /// Locate a card's (rail index, column) within the current rails.
+    private func railPosition(for id: UUID) -> (railIndex: Int, col: Int)? {
+        for (ri, rail) in model.rails.enumerated() {
+            if let ci = rail.items.firstIndex(where: { $0.id == id }) {
+                return (ri, ci)
+            }
+        }
+        return nil
+    }
+
     private var activeNavId: String {
         switch model.catalog {
         case .meetups: return "meetups"
@@ -278,6 +344,47 @@ struct HomeView: View {
         case "mylist": navOpen = false; model.enterCatalog(.myList); focusFirstRailOrNav()
         default: break
         }
+    }
+
+    /// LEFT past the Watch button: page to the previous slide if one exists,
+    /// otherwise (on the first slide) open the nav (§6.4).
+    private func heroLeftEdge() {
+        guard model.catalog == nil else { openNav(); return }
+        if slideIndex > 0 {
+            withAnimation(.easeInOut(duration: 0.45)) { slideIndex -= 1 }
+        } else {
+            openNav()
+        }
+    }
+
+    /// RIGHT past the Info button: page to the next slide (consume on the last).
+    /// Landing focus on Watch/Continue mirrors the LEFT-edge behavior so every
+    /// slide change parks on the primary CTA, not on whichever button paged.
+    private func heroRightEdge() {
+        guard model.catalog == nil, model.heroItems.count > 1 else { return }
+        if slideIndex < model.heroItems.count - 1 {
+            withAnimation(.easeInOut(duration: 0.45)) { slideIndex += 1 }
+            focus = .heroWatch
+        }
+    }
+
+    /// UP from the first rail → carousel Watch/Continue. The hero is COLLAPSED
+    /// while a rail card is focused, and the action row (which contains the
+    /// Watch button) is **only rendered in the expanded state**. So we must
+    /// expand FIRST to mount the button, then move focus to it on the next
+    /// runloop — focusing `.heroWatch` before it exists silently no-ops, which
+    /// is why UP appeared to do nothing.
+    private func bridgeUpToHero() {
+        guard model.catalog == nil else { return }
+        heroExpanded = true
+        DispatchQueue.main.async { focus = .heroWatch }
+    }
+
+    /// Open the nav and land focus on the active section's item. The nav is
+    /// disabled while closed, so this explicit move is the only way in.
+    private func openNav() {
+        navOpen = true
+        DispatchQueue.main.async { focus = .nav(activeNavId) }
     }
 
     private func onSelectItem(_ item: RailItem) {

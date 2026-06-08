@@ -62,8 +62,12 @@ final class ApiClient {
 
     func me() async throws -> MeResponse { try await send(.get, "/me") }
 
-    func events(page: Int = 1, perPage: Int = 50) async throws -> EventsResponse {
-        try await send(.get, "/events?page=\(page)&per_page=\(perPage)&exclude_future=1")
+    /// `type` filters server-side: `"meetup"` → `location_type != 'online'`
+    /// (in-person/hybrid), `"livestream"` → online only. Nil returns all (§6.7).
+    func events(page: Int = 1, perPage: Int = 50, type: String? = nil) async throws -> EventsResponse {
+        var path = "/events?page=\(page)&per_page=\(perPage)&exclude_future=1"
+        if let type { path += "&type=\(type)" }
+        return try await send(.get, path)
     }
 
     func event(id: Int) async throws -> EventDetailResponse {
@@ -73,6 +77,55 @@ final class ApiClient {
     func search(query: String) async throws -> SearchResponse {
         let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         return try await send(.get, "/search?q=\(q)")
+    }
+
+    // MARK: - Player: stream, progress, notes (§9)
+
+    /// `GET /videos/{id}/stream-url` → HLS URL + meta + annotations +
+    /// chapters + next_video (§9.2).
+    func streamUrl(videoId: Int) async throws -> StreamUrlResponse {
+        try await send(.get, "/videos/\(videoId)/stream-url")
+    }
+
+    /// `PUT /videos/{id}/progress` → 204. Throttled save (§9.13).
+    @discardableResult
+    func saveProgress(videoId: Int, seconds: Int) async throws -> EmptyResponse {
+        try await send(.put, "/videos/\(videoId)/progress", body: ["seconds": seconds])
+    }
+
+    /// `GET /videos/{id}/notes` → the viewer's private notes (§9.6).
+    func notes(videoId: Int) async throws -> NotesResponse {
+        try await send(.get, "/videos/\(videoId)/notes")
+    }
+
+    /// `DELETE /videos/{id}/notes/{noteId}` (§9.8).
+    @discardableResult
+    func deleteNote(videoId: Int, noteId: Int) async throws -> EmptyResponse {
+        try await send(.delete, "/videos/\(videoId)/notes/\(noteId)")
+    }
+
+    // MARK: - TV-note QR companion (§9.7)
+
+    /// `POST /tv-notes/request` — mint a phone-compose code (Edit passes
+    /// `noteId`). Returns `scan_url` + `code` + `short_url`.
+    func requestTvNoteCode(videoId: Int, seconds: Int, noteId: Int? = nil) async throws -> TvNoteRequestResponse {
+        var body: [String: Any] = ["video_id": videoId, "seconds": seconds]
+        if let noteId { body["note_id"] = noteId }
+        return try await send(.post, "/tv-notes/request", body: body)
+    }
+
+    /// `GET /tv-notes/poll?code=` — pending / scanned / completed / expired.
+    /// 410/404 surface as `ApiError.http` so callers can show the expiry panel.
+    func pollTvNoteCode(_ code: String) async throws -> TvNotePollResponse {
+        let q = code.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? code
+        return try await send(.get, "/tv-notes/poll?code=\(q)")
+    }
+
+    /// `DELETE /tv-notes/{code}` — cancel an unfinished code on close (§9.7).
+    @discardableResult
+    func cancelTvNoteCode(_ code: String) async throws -> EmptyResponse {
+        let q = code.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? code
+        return try await send(.delete, "/tv-notes/\(q)")
     }
 
     // MARK: - Bookmarks (idempotent, 204)

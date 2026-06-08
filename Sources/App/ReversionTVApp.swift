@@ -41,12 +41,12 @@ struct RootView: View {
     @ViewBuilder
     private func destination(for route: Route) -> some View {
         switch route {
-        case let .eventDetail(_, title):
-            ScreenPlaceholder(title: title ?? "Event", subtitle: "Event Detail (§7) lands next.")
+        case let .eventDetail(id, title):
+            EventDetailView(eventId: id, title: title)
         case let .player(videoId):
-            ScreenPlaceholder(title: "Player", subtitle: "Video #\(videoId) — Player (§9) lands next.")
+            PlayerView(videoId: videoId)
         case .search:
-            ScreenPlaceholder(title: "Search", subtitle: "Search (§8) lands next.")
+            SearchView()
         case .settings:
             ScreenPlaceholder(title: "Settings", subtitle: "Settings (§10) lands next.")
         }

@@ -6,6 +6,13 @@ import Foundation
 enum HomeFocus: Hashable {
     case nav(String)
     case heroWatch, heroMyList, heroInfo
+    /// Event Detail's focusable long-description block (OK → full-text modal,
+    /// §7). Lives here because Detail reuses the shared nav + rail components,
+    /// which are bound to this focus space.
+    case detailDescription
+    /// Search screen query field + clear button (§8). Reuses the shared nav +
+    /// rail components, so it shares this focus space too.
+    case searchField, searchClear
     case card(UUID)
 }
 

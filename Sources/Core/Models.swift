@@ -61,6 +61,8 @@ struct MediaItem: Decodable {
     let wordmarkUrl: String?
     let tvSubtitle: String?
     let shortDescription: String?
+    /// Full long-form description (event-detail payload only, §7).
+    let description: String?
     let sessionDate: String?
     let videoCount: Int?
     let isNew: Bool?
