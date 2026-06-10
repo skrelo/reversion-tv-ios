@@ -134,6 +134,12 @@ struct MeResponse: Decodable {
     let user: User?
 }
 
+/// `GET /legal/{document}` → in-app legal reader content (§10.3). No auth.
+struct LegalResponse: Decodable {
+    let title: String?
+    let html: String?
+}
+
 struct User: Decodable {
     let id: Int?
     let name: String?

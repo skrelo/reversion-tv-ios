@@ -67,14 +67,24 @@ struct MarkerStripView: View {
                 .onChange(of: focusIndex) { _, idx in
                     if focused { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(idx, anchor: .center) } }
                 }
-                .onChange(of: centerNonce) { _, _ in
-                    if !focused, let p = playheadIndex { proxy.scrollTo(p, anchor: .center) }
-                }
-                .onAppear {
-                    if !focused, let p = playheadIndex { proxy.scrollTo(p, anchor: .center) }
-                }
+                // Auto-center on the chip nearest the playhead: when the chrome
+                // opens (centerNonce), when the nearest marker changes (e.g. the
+                // resume seed lands after load), and on first appear. Never while
+                // the strip is focused (§9.6). Dispatched async + instant so it
+                // isn't skipped when the strip is still opacity-0 at fire time.
+                .onChange(of: centerNonce) { _, _ in center(proxy) }
+                .onChange(of: playheadIndex) { _, _ in center(proxy) }
+                .onAppear { center(proxy) }
             }
         }
+    }
+
+    /// Instant-center on the chip nearest the playhead (never while focused).
+    /// Async so it runs after the current layout/opacity pass — a smooth or
+    /// same-pass scroll on a still-hidden strip gets skipped, leaving it at 0.
+    private func center(_ proxy: ScrollViewProxy) {
+        guard !focused, let p = playheadIndex else { return }
+        DispatchQueue.main.async { proxy.scrollTo(p, anchor: .center) }
     }
 
     private func chip(_ m: Marker, focused: Bool) -> some View {
@@ -111,15 +121,29 @@ struct MarkerStripView: View {
 
 struct MarkerPopupView: View {
     let marker: Marker
+    /// When true this pop-up is doubling as the post-save confirmation: it shows
+    /// a "Note Saved" badge instead of a separate banner (§9.7). The pop-up is
+    /// the note the user just created/edited.
+    var saved: Bool = false
 
-    private var link: String? { Html.firstLink(marker.body) }
+    /// §9.6: image vs link decided by the `<img>` tag. A body image wins (shown
+    /// as a thumbnail); otherwise a webpage link is surfaced as TEXT. NEVER a QR
+    /// here — the QR lives on the detail card (§9.8).
+    private var thumb: String? { marker.images.first }
+    private var linkText: String? { thumb == nil ? marker.link : nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
-            if let first = marker.images.first, let url = ImageURL.sized(first, width: 240) {
-                RemoteImage(url: url).frame(width: 150, height: 96).clipped().cornerRadius(8)
-            }
             VStack(alignment: .leading, spacing: 8) {
+                if saved {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill").font(.system(size: 18, weight: .bold))
+                        Text("Note Saved").font(.system(size: 18, weight: .bold))
+                    }
+                    .foregroundStyle(Theme.bg)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(MarkerColor.note).cornerRadius(8)
+                }
                 HStack(spacing: 10) {
                     Circle().fill(MarkerColor.dot(marker.kind)).frame(width: 12, height: 12)
                     Text(Html.timecode(marker.startsAt))
@@ -136,13 +160,16 @@ struct MarkerPopupView: View {
                 if !marker.bodyText.isEmpty {
                     Text(marker.bodyText).font(.system(size: 20)).foregroundStyle(Theme.textDim).lineLimit(3)
                 }
+                if let linkText {
+                    Text(linkText)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(MarkerColor.dot(marker.kind))
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
             .frame(maxWidth: 460, alignment: .leading)
-            if let link {
-                VStack(spacing: 6) {
-                    ScanQR(string: link, size: 128)
-                    Text("Scan to open").font(.system(size: 15)).foregroundStyle(Theme.textDim)
-                }
+            if let thumb, let url = ImageURL.sized(thumb, width: 240) {
+                RemoteImage(url: url).frame(width: 150, height: 96).clipped().cornerRadius(8)
             }
         }
         .padding(22)
@@ -161,19 +188,26 @@ struct DetailCardView: View {
     let focusKey: String
     let truncated: Bool
 
-    private var link: String? { Html.firstLink(marker.body) }
+    private var link: String? { marker.link }
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.7).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 18) {
+                // §9.8: a single "Press BACK to close" hint replaces a focusable
+                // close button — BACK already dismisses the card.
+                Text("Press BACK to close")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.textDim)
+                    .frame(maxWidth: .infinity, alignment: .center)
+
                 HStack {
                     // §9.8: play-icon "Go to {timecode}" button — default focus;
                     // OK seeks the playhead here and closes the card.
                     HStack(spacing: 10) {
                         Image(systemName: "play.fill").font(.system(size: 20, weight: .bold))
-                        Text(Html.timecode(marker.startsAt))
-                            .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                        Text("Go to \(Html.timecode(marker.startsAt))")
+                            .font(.system(size: 24, weight: .semibold))
                     }
                     .foregroundStyle(focusKey == "goto" ? Theme.bg : MarkerColor.dot(marker.kind))
                     .padding(.horizontal, 18).padding(.vertical, 10)
@@ -189,24 +223,12 @@ struct DetailCardView: View {
                         pillIcon("pencil", focused: focusKey == "edit")
                         pillIcon("trash", focused: focusKey == "delete")
                     }
-                    closeButton(focused: focusKey == "close")
                 }
                 Text(marker.title.isEmpty ? (marker.isNote ? "Note" : "Annotation") : marker.title)
                     .font(.system(size: 38, weight: .bold)).foregroundStyle(Theme.text)
                 Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
 
-                if !marker.images.isEmpty {
-                    HStack(spacing: 16) {
-                        ForEach(Array(marker.images.enumerated()), id: \.offset) { i, src in
-                            if let url = ImageURL.sized(src, width: 360) {
-                                RemoteImage(url: url)
-                                    .frame(width: 220, height: 132).clipped().cornerRadius(8)
-                                    .overlay(RoundedRectangle(cornerRadius: 8)
-                                        .stroke(focusKey == "thumb\(i)" ? Theme.gold : .clear, lineWidth: 4))
-                            }
-                        }
-                    }
-                }
+                imageArea
 
                 if !marker.bodyText.isEmpty {
                     Text(marker.bodyText)
@@ -223,10 +245,23 @@ struct DetailCardView: View {
                         .cornerRadius(8)
                 }
 
+                // §9.8: a webpage link → QR + the URL printed beneath it. Image
+                // URLs are never QR'd (they render as images above).
                 if let link {
-                    HStack(spacing: 14) {
+                    HStack(alignment: .center, spacing: 18) {
                         ScanQR(string: link, size: 192)
-                        Text("Scan to open").font(.system(size: 20)).foregroundStyle(Theme.textDim)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Scan to open")
+                                .font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.text)
+                            // Only print the URL here when the body text doesn't
+                            // already show it — otherwise it appears twice (§9.8).
+                            if !marker.bodyText.contains(link) {
+                                Text(link)
+                                    .font(.system(size: 18)).foregroundStyle(Theme.textDim)
+                                    .lineLimit(2).truncationMode(.middle)
+                                    .frame(maxWidth: 520, alignment: .leading)
+                            }
+                        }
                     }
                 }
             }
@@ -237,6 +272,41 @@ struct DetailCardView: View {
         }
     }
 
+    /// §9.8 image area, presentation decided by COUNT: exactly one image renders
+    /// LARGE + CENTERED; two or more render as a horizontal thumbnail strip.
+    /// Both are focusable/selectable (OK → full-screen viewer, §9.9) with a
+    /// single "Press OK to enlarge" hint above.
+    @ViewBuilder
+    private var imageArea: some View {
+        if !marker.images.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Press OK to enlarge")
+                    .font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.textDim)
+
+                if marker.images.count == 1 {
+                    if let url = ImageURL.sized(marker.images[0], width: 900) {
+                        RemoteImage(url: url, contentMode: .fit)
+                            .frame(maxWidth: 760, maxHeight: 300)
+                            .overlay(RoundedRectangle(cornerRadius: 10)
+                                .stroke(focusKey == "thumb0" ? Theme.gold : .clear, lineWidth: 4))
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                } else {
+                    HStack(spacing: 16) {
+                        ForEach(Array(marker.images.enumerated()), id: \.offset) { i, src in
+                            if let url = ImageURL.sized(src, width: 360) {
+                                RemoteImage(url: url)
+                                    .frame(width: 220, height: 132).clipped().cornerRadius(8)
+                                    .overlay(RoundedRectangle(cornerRadius: 8)
+                                        .stroke(focusKey == "thumb\(i)" ? Theme.gold : .clear, lineWidth: 4))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func pillIcon(_ system: String, focused: Bool) -> some View {
         Image(systemName: system)
             .font(.system(size: 24)).foregroundStyle(focused ? Theme.bg : Theme.text)
@@ -244,12 +314,6 @@ struct DetailCardView: View {
             .background(focused ? Theme.gold : Color.white.opacity(0.12)).clipShape(Circle())
     }
 
-    private func closeButton(focused: Bool) -> some View {
-        Image(systemName: "xmark")
-            .font(.system(size: 24, weight: .bold)).foregroundStyle(focused ? Theme.bg : Theme.text)
-            .frame(width: 52, height: 52)
-            .background(focused ? Theme.gold : Color.white.opacity(0.12)).clipShape(Circle())
-    }
 }
 
 // MARK: - Image viewer (§9.9)

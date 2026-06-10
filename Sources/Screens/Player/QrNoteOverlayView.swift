@@ -138,13 +138,13 @@ struct QrNoteOverlayView: View {
                                     Text("Scan it, or enter this code in the app")
                                         .font(.system(size: 16)).foregroundStyle(Theme.textDim)
                                     Text(formatCode(model.code))
-                                        .font(.system(size: 32, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(Theme.text)
+                                        .font(.system(size: 44, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Theme.gold)
                                 }
                             }
                             if !model.shortURL.isEmpty {
-                                Text("No app? Go to \(model.shortURL)")
-                                    .font(.system(size: 18)).foregroundStyle(Theme.textDim)
+                                (Text("No app? Go to ").font(.system(size: 18)).foregroundColor(Theme.textDim)
+                                 + Text(model.shortURL).font(.system(size: 18, weight: .bold)).foregroundColor(Theme.gold))
                             }
                         }
                     }

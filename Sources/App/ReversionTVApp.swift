@@ -48,7 +48,7 @@ struct RootView: View {
         case .search:
             SearchView()
         case .settings:
-            ScreenPlaceholder(title: "Settings", subtitle: "Settings (§10) lands next.")
+            SettingsView()
         }
     }
 }

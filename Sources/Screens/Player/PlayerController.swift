@@ -61,7 +61,9 @@ final class PlayerController: ObservableObject {
     // ── Overlays ──
     @Published var overlay: PlayerOverlay = .none
     @Published var activeMarker: Marker?
-    @Published var detailFocusKey = "close"
+    /// Current detail-card grid focus key. Empty = nothing highlighted (the
+    /// card just opened); the first directional press enters the grid (§9.8).
+    @Published var detailFocusKey = ""
     @Published var viewerIndex = 0
     @Published var settingsIndex = 0
     @Published var qrFocus = 0
@@ -72,6 +74,9 @@ final class PlayerController: ObservableObject {
 
     // ── Ambient / transient ──
     @Published var popupMarker: Marker?
+    /// True while `popupMarker` is doubling as the post-save confirmation (shows
+    /// a "Note Saved" badge instead of a separate banner, §9.7).
+    @Published var popupSaved = false
     @Published var saveBanner: String?
     @Published var flash: String?
     @Published var seekIndicator: (tier: Int, dir: Int)?
@@ -402,8 +407,10 @@ final class PlayerController: ObservableObject {
 
     private func openDetail(_ marker: Marker) {
         activeMarker = marker
-        // §9.8: default focus is the play-icon "Go to {timecode}" button.
-        detailFocusKey = "goto"
+        // §9.8: open with NOTHING highlighted so "Go to {timecode}" isn't
+        // pre-selected (avoids an accidental seek on a reflexive OK). The first
+        // directional press enters the grid at the top-left button.
+        detailFocusKey = ""
         openModal(.detail)
     }
 
@@ -436,16 +443,31 @@ final class PlayerController: ObservableObject {
         return best
     }
 
-    func detailFocusList(_ marker: Marker?) -> [String] {
-        guard let marker else { return ["close"] }
-        // §9.8: "Go to {timecode}" is first (default focus); then thumbs, read
-        // more, edit/delete (notes only), close.
-        var list: [String] = ["goto"]
-        for (i, _) in marker.images.enumerated() { list.append("thumb\(i)") }
-        if marker.bodyText.count > detailBodyClamp { list.append("readmore") }
-        if marker.isNote { list.append("edit"); list.append("delete") }
-        list.append("close")
-        return list
+    /// §9.8: detail-card focus is a **2D grid**, not a flat list. Row 0 is the
+    /// top button row (Go to → Edit/Delete for notes → Close); row 1 is the
+    /// image row (LEFT/RIGHT page images); row 2 is the "Press OK to read"
+    /// button. LEFT/RIGHT stay within a row; UP/DOWN move between rows.
+    func detailRows(_ marker: Marker?) -> [[String]] {
+        guard let marker else { return [["goto"]] }
+        var rows: [[String]] = []
+        var top: [String] = ["goto"]
+        if marker.isNote { top.append("edit"); top.append("delete") }
+        rows.append(top)
+        if !marker.images.isEmpty {
+            rows.append(marker.images.indices.map { "thumb\($0)" })
+        }
+        if marker.bodyText.count > detailBodyClamp {
+            rows.append(["readmore"])
+        }
+        return rows
+    }
+
+    /// (row, col) of `key` in the grid; defaults to the top-left button.
+    private func detailPosition(_ rows: [[String]], key: String) -> (Int, Int) {
+        for (r, row) in rows.enumerated() {
+            if let c = row.firstIndex(of: key) { return (r, c) }
+        }
+        return (0, 0)
     }
 
     var detailTruncated: Bool {
@@ -468,10 +490,39 @@ final class PlayerController: ObservableObject {
         }
     }
 
+    /// After the phone saves a note, reload markers and surface the just-saved
+    /// note as the ambient pop-up WITH a "Note Saved" badge — this replaces the
+    /// separate save banner (one combined confirmation, §9.7). Forced to show
+    /// regardless of the note-pop-up toggle, since it's a save acknowledgement.
     func onNoteSaved() {
-        loadNotes(annotations: payload?.annotations ?? [])
-        showBanner("Note saved")
         closeModal()
+        let vid = videoId
+        let at = engine.currentTime
+        Task { [weak self] in
+            guard let self else { return }
+            let notes = (try? await ApiClient.shared.notes(videoId: vid))?.notes ?? []
+            if Task.isCancelled || vid != self.videoId { return }
+            self.markers = Markers.build(annotations: self.payload?.annotations ?? [], notes: notes)
+            self.seedFiredKeys(before: self.engine.currentTime)
+            guard let saved = self.nearestNoteMarker(to: at) else { return }
+            self.firedPopupKeys.insert(saved.key)   // don't let the tick double-fire it
+            self.showSavedPopup(saved)
+        }
+    }
+
+    /// The note marker closest to `time` — the one the user just added/edited.
+    private func nearestNoteMarker(to time: Double) -> Marker? {
+        markers.filter { $0.isNote }
+            .min { abs($0.startsAt - time) < abs($1.startsAt - time) }
+    }
+
+    private func showSavedPopup(_ m: Marker) {
+        popupSaved = true
+        popupMarker = m
+        popupWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.popupMarker = nil; self?.popupSaved = false }
+        popupWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + popupLifetimeMs / 1000, execute: work)
     }
 
     private func persistSetting(_ index: Int) {
@@ -551,9 +602,10 @@ final class PlayerController: ObservableObject {
                 firedPopupKeys.insert(m.key)
                 let enabled = m.kind == .annotation ? annotationPopups : notePopups
                 if !enabled { continue }
+                popupSaved = false
                 popupMarker = m
                 popupWork?.cancel()
-                let work = DispatchWorkItem { [weak self] in self?.popupMarker = nil }
+                let work = DispatchWorkItem { [weak self] in self?.popupMarker = nil; self?.popupSaved = false }
                 popupWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + popupLifetimeMs / 1000, execute: work)
                 break
@@ -718,11 +770,29 @@ final class PlayerController: ObservableObject {
     }
 
     private func handleDetail(_ key: RemoteKey) -> Bool {
-        let list = detailFocusList(activeMarker)
-        let idx = max(0, list.firstIndex(of: detailFocusKey) ?? 0)
+        let rows = detailRows(activeMarker)
+        // Nothing highlighted yet (card just opened, §9.8): a directional press
+        // enters the grid at the top-left button; OK is ignored so a reflexive
+        // press can't accidentally seek; BACK closes.
+        let allKeys = rows.flatMap { $0 }
+        if !allKeys.contains(detailFocusKey) {
+            switch key {
+            case .up, .down, .left, .right: detailFocusKey = rows.first?.first ?? ""
+            case .menu: closeModal()
+            default: break
+            }
+            return true
+        }
+        let (r, c) = detailPosition(rows, key: detailFocusKey)
         switch key {
-        case .left: detailFocusKey = list[max(0, idx - 1)]
-        case .right: detailFocusKey = list[min(list.count - 1, idx + 1)]
+        // LEFT/RIGHT stay within the current row (never jump rows, §9.8).
+        case .left: if c > 0 { detailFocusKey = rows[r][c - 1] }
+        case .right: if c < rows[r].count - 1 { detailFocusKey = rows[r][c + 1] }
+        // UP/DOWN move between rows, keeping the column where possible.
+        case .up:
+            if r > 0 { let nr = r - 1; detailFocusKey = rows[nr][min(c, rows[nr].count - 1)] }
+        case .down:
+            if r < rows.count - 1 { let nr = r + 1; detailFocusKey = rows[nr][min(c, rows[nr].count - 1)] }
         case .menu: closeModal()
         case .select:
             switch detailFocusKey {
@@ -731,7 +801,6 @@ final class PlayerController: ObservableObject {
                 // resumes playback if the video was playing before the card).
                 if let m = activeMarker { engine.seek(to: m.startsAt) }
                 closeModal()
-            case "close": closeModal()
             case "readmore": overlay = .text
             case "edit":
                 if let m = activeMarker { qrEditNoteId = m.entityId; qrFocus = 0; qrExpired = false; overlay = .qr }

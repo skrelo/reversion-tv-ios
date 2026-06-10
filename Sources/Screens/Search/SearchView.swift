@@ -132,8 +132,8 @@ struct SearchView: View {
                     onUpFromFirstRail: { focus = .searchField },
                     onLeftFromFirstColumn: openNav,
                     cardsShowArtTitle: true,
-                    bottomInset: 80,
-                    defaultFocusNamespace: resultsNS
+                    defaultFocusNamespace: resultsNS,
+                    bottomInset: 80
                 )
             }
             .focusScope(resultsNS)

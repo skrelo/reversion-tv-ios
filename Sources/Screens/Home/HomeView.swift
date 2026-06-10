@@ -8,6 +8,10 @@ struct HomeView: View {
     @State private var heroExpanded = true
     @State private var spotlight: SpotlightData?
     @State private var slideIndex = 0
+    /// Carousel paging direction for the slide transition (true = forward/next).
+    /// Set immediately before each `slideIndex` change so the move transition
+    /// reads the correct edge in the same render pass.
+    @State private var slideForward = true
     @State private var didInitialFocus = false
     /// True while a nav item holds focus. Disables the content's focusability
     /// so DOWN from the bottom nav item can't escape into the rails (it
@@ -49,7 +53,8 @@ struct HomeView: View {
             guard heroExpanded, model.heroItems.count > 1, model.catalog == nil, isHeroFocus(focus) else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             if !Task.isCancelled {
-                withAnimation(.easeInOut(duration: 0.45)) {
+                slideForward = true   // auto-advance always pages forward (last → 0 wraps forward)
+                withAnimation(.easeInOut(duration: 0.5)) {
                     slideIndex = (slideIndex + 1) % model.heroItems.count
                 }
             }
@@ -83,7 +88,11 @@ struct HomeView: View {
                 Theme.bg.ignoresSafeArea()
                 // Full-bleed backdrop behind everything; height tracks the
                 // hero expand/collapse. The nav gradient + content draw on top.
-                HeroBackdropView(url: heroBackdropURL)
+                HeroBackdropView(
+                    url: heroBackdropURL,
+                    slideForward: slideForward,
+                    sliding: heroExpanded && model.catalog == nil
+                )
                     .frame(height: heroBackdropHeight)
                     // Clip to the hero band so a crossfading backdrop can't bleed
                     // edge-to-edge down behind the rails during a slide change.
@@ -101,6 +110,7 @@ struct HomeView: View {
                         spotlight: spotlight,
                         expanded: model.catalog == nil ? heroExpanded : false,
                         isInMyList: model.isEventBookmarked(currentHeroEventId),
+                        slideForward: slideForward,
                         focus: $focus,
                         onPlay: { router.push(.player(videoId: $0)) },
                         onInfo: { router.push(.eventDetail(id: $0, title: currentHeroTitle)) },
@@ -351,7 +361,8 @@ struct HomeView: View {
     private func heroLeftEdge() {
         guard model.catalog == nil else { openNav(); return }
         if slideIndex > 0 {
-            withAnimation(.easeInOut(duration: 0.45)) { slideIndex -= 1 }
+            slideForward = false   // LEFT pages backward → slide in from the leading edge
+            withAnimation(.easeInOut(duration: 0.5)) { slideIndex -= 1 }
         } else {
             openNav()
         }
@@ -363,7 +374,8 @@ struct HomeView: View {
     private func heroRightEdge() {
         guard model.catalog == nil, model.heroItems.count > 1 else { return }
         if slideIndex < model.heroItems.count - 1 {
-            withAnimation(.easeInOut(duration: 0.45)) { slideIndex += 1 }
+            slideForward = true   // RIGHT pages forward → slide in from the trailing edge
+            withAnimation(.easeInOut(duration: 0.5)) { slideIndex += 1 }
             focus = .heroWatch
         }
     }

@@ -9,6 +9,7 @@ import SwiftUI
 struct PairingView: View {
     @EnvironmentObject private var router: AppRouter
     @StateObject private var model = PairingViewModel()
+    @State private var showExitConfirm = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -27,6 +28,15 @@ struct PairingView: View {
         }
         .onAppear { model.start { router.didAuthorize(token: $0) } }
         .onDisappear { model.stop() }
+        .onExitCommand {
+            showExitConfirm = true
+        }
+        .alert("Exit Reversion?", isPresented: $showExitConfirm) {
+            Button("Exit", role: .destructive) { exit(0) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to exit the app?")
+        }
     }
 
     private var brandLockup: some View {

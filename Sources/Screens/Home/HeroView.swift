@@ -6,6 +6,19 @@ import SwiftUI
 /// next loads via the `.id`/opacity transition.
 struct HeroBackdropView: View {
     let url: URL?
+    /// Carousel paging direction (true = forward/next). Drives which edge the
+    /// new backdrop slides in from.
+    var slideForward: Bool = true
+    /// When true the backdrop SLIDES (carousel paging, §6.2 — matches the other
+    /// OSs); when false it crossfades (spotlight art swap while arrowing rails).
+    var sliding: Bool = false
+
+    private var transition: AnyTransition {
+        guard sliding else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: slideForward ? .trailing : .leading),
+            removal: .move(edge: slideForward ? .leading : .trailing))
+    }
 
     var body: some View {
         ZStack {
@@ -14,7 +27,7 @@ struct HeroBackdropView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .id(url?.absoluteString ?? "none")
-                .transition(.opacity)
+                .transition(transition)
             // Bottom scrim only — for hero text legibility. The hero runs
             // FULL-BLEED left↔right; there is NO left scrim. Any left-edge
             // darkening comes solely from the nav's own gradient, and ONLY
@@ -34,6 +47,9 @@ struct HeroContentView: View {
     let spotlight: SpotlightData?
     let expanded: Bool
     let isInMyList: Bool
+    /// Carousel paging direction (true = forward/next) — sets which edge the
+    /// wordmark/text slide in from. Ignored in spotlight mode (crossfade).
+    var slideForward: Bool = true
     @FocusState.Binding var focus: HomeFocus?
 
     let onPlay: (Int) -> Void
@@ -59,6 +75,17 @@ struct HeroContentView: View {
         return "spot-\(spotlight?.title ?? "")-\(spotlight?.videoTitle ?? "")"
     }
 
+    /// Carousel pages with a horizontal SLIDE (§6.2 — matches Android/Tizen):
+    /// the new slide enters from the trailing edge going forward (leading going
+    /// back) while the old one exits the opposite side. Spotlight (collapsed)
+    /// keeps a crossfade — it's a focus-driven art swap, not a carousel page.
+    private var slideTransition: AnyTransition {
+        guard expanded else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: slideForward ? .trailing : .leading).combined(with: .opacity),
+            removal: .move(edge: slideForward ? .leading : .trailing).combined(with: .opacity))
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Color.clear
@@ -72,14 +99,14 @@ struct HeroContentView: View {
             if expanded, let event = current, let w = event.wordmarkUrl, !w.isEmpty {
                 carouselWordmark(w)
                     .id("wm-\(slideIndex)")
-                    .transition(.opacity)
+                    .transition(slideTransition)
             }
 
             // Slide TEXT — crossfades per slide (slideshow). No action row here,
             // so the focused button isn't recreated mid-transition.
             content
                 .id(slideKey)
-                .transition(.opacity)
+                .transition(slideTransition)
                 .padding(.leading, 60)
                 .padding(.trailing, 120)
                 // Lifts the meta/text UP off the action row (carousel) / first

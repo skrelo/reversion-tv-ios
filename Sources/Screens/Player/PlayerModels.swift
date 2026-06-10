@@ -94,7 +94,13 @@ struct Marker: Identifiable, Equatable {
     let body: String
     /// HTML-stripped single-block body text (chips / detail / popup).
     let bodyText: String
+    /// Top-level `image_url` + every `<img>` in the body, deduped, in order
+    /// (§9.8). Drives the detail card image area + the image viewer.
     let images: [String]
+    /// First webpage `<a href>` (with `<img>` stripped first so an image src is
+    /// never mistaken for a link, §9.6/§9.8). Powers the detail-card QR / the
+    /// popup link text. Nil when the body has no web link.
+    let link: String?
 
     var id: String { key }
     var isNote: Bool { kind == .note }
@@ -109,8 +115,6 @@ enum Markers {
 
         for a in annotations {
             guard let id = a.id else { continue }
-            var images: [String] = []
-            if let u = a.imageUrl, !u.isEmpty { images.append(u) }
             out.append(Marker(
                 key: "a\(id)",
                 kind: .annotation,
@@ -119,7 +123,8 @@ enum Markers {
                 title: a.title ?? "",
                 body: a.body ?? "",
                 bodyText: Html.strip(a.body).replacingOccurrences(of: "\n", with: " "),
-                images: images
+                images: collectImages(topLevel: a.imageUrl, body: a.body),
+                link: Html.firstWebLink(a.body)
             ))
         }
 
@@ -133,12 +138,23 @@ enum Markers {
                 title: n.title ?? "",
                 body: n.body ?? "",
                 bodyText: Html.strip(n.body).replacingOccurrences(of: "\n", with: " "),
-                images: []
+                images: collectImages(topLevel: nil, body: n.body),
+                link: Html.firstWebLink(n.body)
             ))
         }
 
         out.sort { $0.startsAt < $1.startsAt }
         return out
+    }
+
+    /// Top-level `image_url` first, then every `<img>` in the body, deduped
+    /// (§9.8). Image-vs-link is decided by the tag, so body images come from
+    /// `<img>` extraction — never from sniffing link URLs.
+    private static func collectImages(topLevel: String?, body: String?) -> [String] {
+        var images: [String] = []
+        if let u = topLevel, !u.isEmpty { images.append(u) }
+        for s in Html.imageSources(body) where !images.contains(s) { images.append(s) }
+        return images
     }
 
     /// Index of the marker nearest a time (auto-center + focus landing, §9.6).

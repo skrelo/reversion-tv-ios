@@ -55,6 +55,32 @@ enum Html {
         return nil
     }
 
+    /// Every `<img src>` URL in an HTML body, in document order (§9.6/§9.8).
+    /// Image-vs-link is decided by the **tag**, so callers collect these and
+    /// strip them before pulling a webpage link (never sniff the URL string).
+    static func imageSources(_ input: String?) -> [String] {
+        guard let input, !input.isEmpty else { return [] }
+        guard let re = try? NSRegularExpression(pattern: "<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']",
+                                                options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(input.startIndex..., in: input)
+        var out: [String] = []
+        for match in re.matches(in: input, range: range) {
+            guard let r = Range(match.range(at: 1), in: input) else { continue }
+            let src = input[r].trimmingCharacters(in: .whitespaces)
+            if !src.isEmpty { out.append(String(src)) }
+        }
+        return out
+    }
+
+    /// `firstLink` with `<img>` tags removed first, so an image's `src` is never
+    /// mistaken for a webpage link (§9.6/§9.8 — decide by the tag, not the URL).
+    static func firstWebLink(_ input: String?) -> String? {
+        guard let input else { return nil }
+        let noImg = input.replacingOccurrences(
+            of: "<img[^>]*>", with: "", options: [.regularExpression, .caseInsensitive])
+        return firstLink(noImg)
+    }
+
     /// `H:MM:SS` / `M:SS` timecode for a second count (§9.16).
     static func timecode(_ seconds: Double) -> String {
         let s = max(0, Int(seconds.isFinite ? seconds : 0))

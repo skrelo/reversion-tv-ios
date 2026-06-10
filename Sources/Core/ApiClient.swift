@@ -62,6 +62,13 @@ final class ApiClient {
 
     func me() async throws -> MeResponse { try await send(.get, "/me") }
 
+    /// `GET /legal/{document}` → `{ title, html }` for the in-app legal reader
+    /// (§10.3). No auth. `document` is `privacy-stewardship-notice` or
+    /// `private-member-digital-agreement`.
+    func legal(document: String) async throws -> LegalResponse {
+        try await send(.get, "/legal/\(document)", authed: false)
+    }
+
     /// `type` filters server-side: `"meetup"` → `location_type != 'online'`
     /// (in-person/hybrid), `"livestream"` → online only. Nil returns all (§6.7).
     func events(page: Int = 1, perPage: Int = 50, type: String? = nil) async throws -> EventsResponse {

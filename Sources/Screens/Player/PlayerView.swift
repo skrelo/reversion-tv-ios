@@ -33,11 +33,14 @@ struct PlayerView: View {
                 if c.engine.isLoading { ProgressView().scaleEffect(2).tint(Theme.text) }
                 if let flash = c.flash { flashGlyph(flash) }
 
-                // Ambient popup (top-left).
+                // Ambient popup — TOP-CENTER. Centering clears the chrome's
+                // top-LEFT title block and top-RIGHT icon row, so they don't
+                // stack when chrome is up (e.g. right after saving a note, the
+                // new marker's popup fires while controls are still visible).
                 if let m = c.popupMarker {
-                    MarkerPopupView(marker: m)
-                        .padding(.leading, 80).padding(.top, 60)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    MarkerPopupView(marker: m, saved: c.popupSaved)
+                        .padding(.top, 60)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .transition(.opacity)
                 }
 
