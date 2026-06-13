@@ -9,6 +9,7 @@ struct LeftNavView: View {
     let activeId: String
     let profileName: String
     let profileHandle: String
+    var profilePhotoUrl: String = ""
     @FocusState.Binding var focus: HomeFocus?
     let onSelect: (String) -> Void
 
@@ -85,14 +86,18 @@ struct LeftNavView: View {
 
     private var profile: some View {
         HStack(spacing: 16) {
-            Circle()
-                .fill(Theme.gold.opacity(0.25))
-                .frame(width: 64, height: 64)
-                .overlay(
+            ZStack {
+                Circle().fill(Theme.gold.opacity(0.25))
+                if let url = ImageURL.sized(profilePhotoUrl, width: 128), !profilePhotoUrl.isEmpty {
+                    RemoteImage(url: url, contentMode: .fill, placeholder: .clear)
+                        .clipShape(Circle())
+                } else {
                     Text(String(profileName.prefix(1)).uppercased())
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Theme.gold)
-                )
+                }
+            }
+            .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 2) {
                 Text(profileName)
                     .font(.system(size: 24, weight: .semibold))

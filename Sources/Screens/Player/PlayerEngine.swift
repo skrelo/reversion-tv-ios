@@ -117,13 +117,25 @@ final class PlayerEngine: ObservableObject {
             didApplyResume = true
             let watched = duration > 0 && pendingResume >= duration * 0.95
             if pendingResume > 1, !watched {
+                // Keep isLoading = true until the seek lands so the player
+                // surface stays hidden at 0:00 while scrubbing to the resume
+                // position. The completion handler clears it.
+                let speed = pendingSpeed
                 player.seek(to: CMTime(seconds: pendingResume, preferredTimescale: 600),
-                            toleranceBefore: .zero, toleranceAfter: .zero)
+                            toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.player.rate = speed
+                        self.player.play()
+                        self.isLoading = false
+                    }
+                }
+            } else {
+                player.rate = pendingSpeed
+                player.play()
+                isLoading = false
             }
-            player.rate = pendingSpeed
-            player.play()
         }
-        isLoading = false
         configureCaptions(item: item)
     }
 

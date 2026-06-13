@@ -13,18 +13,23 @@ enum Route: Hashable {
 
 @MainActor
 final class AppRouter: ObservableObject {
-    enum Root { case pairing, home }
+    enum Root { case welcome, pairing, home }
 
     @Published var root: Root
     /// Navigation stack on top of Home (Event Detail / Player / Search / Settings).
     @Published var path: [Route] = []
 
     init() {
-        root = KeychainTokenStore.isLoggedIn ? .home : .pairing
+        root = KeychainTokenStore.isLoggedIn ? .home : .welcome
     }
 
     func push(_ route: Route) { path.append(route) }
     func popToRoot() { path.removeAll() }
+
+    /// Welcome → Pairing (§5).
+    func goToPairing() {
+        root = .pairing
+    }
 
     /// Pairing succeeded — persist token, go Home (§5).
     func didAuthorize(token: String) {
@@ -33,11 +38,11 @@ final class AppRouter: ObservableObject {
         root = .home
     }
 
-    /// Clear token + non-token prefs, return to Pairing (§5, §10.5).
+    /// Clear token + non-token prefs, return to Welcome (§5).
     func signOut() {
         KeychainTokenStore.clear()
         Prefs.clear()
         path.removeAll()
-        root = .pairing
+        root = .welcome
     }
 }

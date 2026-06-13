@@ -76,6 +76,11 @@ struct HomeView: View {
 
     // MARK: - Layers
 
+    /// True when the API call succeeded but the account has no entitled content.
+    private var isEntitlementEmpty: Bool {
+        !model.loading && model.error == nil && model.heroItems.isEmpty && model.rails.isEmpty
+    }
+
     @ViewBuilder
     private var contentLayer: some View {
         if let error = model.error {
@@ -83,6 +88,8 @@ struct HomeView: View {
                 Text(error).font(.system(size: 30)).foregroundStyle(Theme.textDim) }
         } else if model.loading {
             ZStack { Theme.bg.ignoresSafeArea(); ProgressView().scaleEffect(2) }
+        } else if isEntitlementEmpty {
+            emptyStateView
         } else {
             ZStack(alignment: .topLeading) {
                 Theme.bg.ignoresSafeArea()
@@ -138,6 +145,7 @@ struct HomeView: View {
                     activeId: activeNavId,
                     profileName: model.profileName,
                     profileHandle: model.profileHandle,
+                    profilePhotoUrl: model.profilePhotoUrl,
                     focus: $focus,
                     onSelect: onNavSelect
                 )
@@ -160,12 +168,43 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - Empty state (authorized but no entitlements)
+
+    @FocusState private var emptyRefreshFocused: Bool
+
+    private var emptyStateView: some View {
+        ZStack {
+            Theme.bg.ignoresSafeArea()
+            VStack(spacing: 32) {
+                Image(systemName: "film.slash")
+                    .font(.system(size: 64))
+                    .foregroundStyle(Theme.textDim)
+                Text("Nothing here yet")
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundStyle(Theme.text)
+                Text("Your account doesn't have access to any content yet.\nContact your coach to get access.")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Theme.textDim)
+                    .multilineTextAlignment(.center)
+                Button("Refresh") {
+                    Task { await model.load(silent: false) }
+                }
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(emptyRefreshFocused ? Theme.bg : Theme.gold)
+                .padding(.horizontal, 48).padding(.vertical, 18)
+                .background(emptyRefreshFocused ? Theme.gold : Theme.gold.opacity(0.18))
+                .cornerRadius(12)
+                .focused($emptyRefreshFocused)
+                .buttonStyle(.plain)
+            }
+            .padding(80)
+        }
+        .onAppear { emptyRefreshFocused = true }
+    }
+
     @ViewBuilder
     private var railsArea: some View {
         if model.rails.isEmpty {
-            Text("Nothing here yet.")
-                .font(.system(size: 26)).foregroundStyle(Theme.textDim)
-                .padding(.leading, 60).padding(.top, 40)
             Spacer(minLength: 0)
         } else {
             ScrollView(.vertical, showsIndicators: false) {

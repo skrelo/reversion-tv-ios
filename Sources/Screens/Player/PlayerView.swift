@@ -21,7 +21,11 @@ struct PlayerView: View {
             if let error = c.error {
                 errorPanel(error)
             } else {
-                PlayerSurface(player: c.engine.player).ignoresSafeArea()
+                // Hide the video surface until loading is done to prevent a
+                // flash at 0:00 while the seek-to-resume position is in flight.
+                PlayerSurface(player: c.engine.player)
+                    .ignoresSafeArea()
+                    .opacity(c.engine.isLoading ? 0 : 1)
 
                 // Single focusable surface — captures all remote presses.
                 RemoteControlReceiver(
@@ -261,9 +265,9 @@ struct PlayerView: View {
     private var overlayLayer: some View {
         switch c.overlay {
         case .settings:
-            SettingsMenuView(annotationPopups: c.annotationPopups, notePopups: c.notePopups, focusIndex: c.settingsIndex)
-                .padding(.trailing, 80).padding(.bottom, 80)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            SettingsMenuView(annotationPopups: c.annotationPopups, notePopups: c.notePopups, speed: c.sessionSpeed, focusIndex: c.settingsIndex)
+                .padding(.trailing, 80).padding(.top, 140)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         case .detail:
             if let m = c.activeMarker {
                 DetailCardView(marker: m, focusKey: c.detailFocusKey, truncated: c.detailTruncated)

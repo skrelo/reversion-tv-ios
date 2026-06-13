@@ -80,10 +80,10 @@ struct PairingView: View {
                 .foregroundStyle(Theme.textDim)
 
             VStack(alignment: .leading, spacing: 16) {
-                step("①", "Open the Reversion app on your phone and scan the QR code.")
+                step("①", "Scan the QR code with your phone camera.")
                 step("②", AnyView(
                     HStack(spacing: 0) {
-                        Text("On any browser, go to ")
+                        Text("Or on any browser, go to ")
                         Text("reversion.app/activate").foregroundStyle(Theme.gold)
                     }
                 ))

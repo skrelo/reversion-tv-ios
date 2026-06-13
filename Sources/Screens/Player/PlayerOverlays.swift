@@ -376,21 +376,23 @@ struct TextReaderView: View {
 struct SettingsMenuView: View {
     let annotationPopups: Bool
     let notePopups: Bool
+    let speed: Double
     let focusIndex: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Settings").font(.system(size: 26, weight: .bold)).foregroundStyle(Theme.text)
                 .padding(.bottom, 6)
-            row("Annotation pop-ups", on: annotationPopups, focused: focusIndex == 0)
-            row("Note pop-ups", on: notePopups, focused: focusIndex == 1)
+            toggleRow("Annotation pop-ups", on: annotationPopups, focused: focusIndex == 0)
+            toggleRow("Note pop-ups", on: notePopups, focused: focusIndex == 1)
+            speedRow(focused: focusIndex == 2)
         }
         .padding(28)
         .frame(width: 520, alignment: .leading)
         .background(Theme.surface).cornerRadius(16)
     }
 
-    private func row(_ label: String, on: Bool, focused: Bool) -> some View {
+    private func toggleRow(_ label: String, on: Bool, focused: Bool) -> some View {
         HStack {
             Text(label).font(.system(size: 24)).foregroundStyle(Theme.text)
             Spacer()
@@ -402,6 +404,27 @@ struct SettingsMenuView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(focused ? Theme.text.opacity(0.14) : .clear).cornerRadius(10)
+    }
+
+    private func speedRow(focused: Bool) -> some View {
+        HStack {
+            Text("Playback speed").font(.system(size: 24)).foregroundStyle(Theme.text)
+            Spacer()
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.left").font(.system(size: 16, weight: .semibold))
+                Text(speedLabel).font(.system(size: 22, weight: .semibold))
+                Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(Theme.bg)
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .background(Theme.gold).cornerRadius(20)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(focused ? Theme.text.opacity(0.14) : .clear).cornerRadius(10)
+    }
+
+    private var speedLabel: String {
+        speed == 1.0 ? "Normal" : String(format: speed.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f×" : "%.2g×", speed)
     }
 }
 

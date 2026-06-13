@@ -1,0 +1,49 @@
+---
+description: Store-review (Amazon/Google/Samsung/Apple) reviewer accounts, static pairing code, and activation steps — do not re-ask the user
+alwaysApply: true
+---
+
+# Store reviewer accounts + static sign-in code
+
+When writing **app-store tester instructions / review notes / demo-account
+credentials** for any platform (Amazon Appstore, Google Play, Samsung Galaxy
+Store, App Store), use the facts below. **Do not ask the user for this again** —
+it is fixed.
+
+## Reviewer accounts
+
+- Emails: `reviewer@reversion.app` (primary), plus `reviewer1@reversion.app`
+  … `reviewer5@reversion.app` for parallel reviewers.
+- Any `@reversion.app` email is auto-flagged `is_review_account = true` (and
+  `special_access = true`) in the backend, which **bypasses the entitlement
+  gate** — so these accounts see real content instead of an empty home.
+
+## Static sign-in code (no email sent)
+
+- Sign-in is **passwordless email-code**. For any reviewer account, the login
+  code is the fixed value **`4TGW6D`** (`MOBILE_REVIEW_FIXED_CODE`).
+- Entering `4TGW6D` always works and **sends no email** — reviewers don't need
+  inbox access. The same code authorizes TV pairing for these accounts.
+
+## TV activation steps (what reviewers do)
+
+1. Launch the app → **Welcome** screen → **Sign In** → pairing screen shows a
+   6-character code + a QR.
+2. On a phone/browser: scan the QR (opens `reversion.app/activate?code=CODE`
+   prefilled) **or** go to `reversion.app/activate` and enter the code.
+3. Sign in as `reviewer@reversion.app`; when prompted for the login code, enter
+   **`4TGW6D`**.
+4. The TV authorizes automatically and loads the home screen (with content,
+   because the account bypasses entitlements).
+
+## Why this matters
+
+- A **brand-new** account has no content by design and correctly shows the
+  "Nothing here yet" empty state. Reviewers who create their own account think
+  the app is broken — **always tell them to use the reviewer credentials above
+  and not create a new account.**
+
+## Source of truth
+
+- Backend: `is_review_account` / `special_access` flags + `MOBILE_REVIEW_FIXED_CODE`
+  in the `reversion` repo. If these values ever change there, update this rule.

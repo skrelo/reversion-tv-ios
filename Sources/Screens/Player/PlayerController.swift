@@ -90,9 +90,12 @@ final class PlayerController: ObservableObject {
     @Published var recItems: [RecItem] = []
     @Published var recIndex = 0
 
-    // ── Settings (in-player pop-up toggles, §9.11) ──
+    // ── Settings (in-player pop-up toggles + per-session speed, §9.11) ──
     @Published var annotationPopups = Prefs.annotationPopups
     @Published var notePopups = Prefs.notePopups
+    @Published var sessionSpeed: Double = Prefs.playbackSpeed
+
+    static let speedSteps: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     // ── Internal refs / timers ──
     private var bag = Set<AnyCancellable>()
@@ -525,11 +528,20 @@ final class PlayerController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + popupLifetimeMs / 1000, execute: work)
     }
 
-    private func persistSetting(_ index: Int) {
-        if index == 0 {
+    private func persistSetting(_ index: Int, direction: Int = 1) {
+        switch index {
+        case 0:
             annotationPopups.toggle(); Prefs.annotationPopups = annotationPopups
-        } else {
+        case 1:
             notePopups.toggle(); Prefs.notePopups = notePopups
+        case 2:
+            let steps = Self.speedSteps
+            let current = steps.firstIndex(where: { abs($0 - sessionSpeed) < 0.01 }) ?? 2
+            let next = (current + direction + steps.count) % steps.count
+            sessionSpeed = steps[next]
+            Prefs.playbackSpeed = sessionSpeed
+            engine.setRate(Float(sessionSpeed))
+        default: break
         }
     }
 
@@ -820,8 +832,9 @@ final class PlayerController: ObservableObject {
     private func handleSettings(_ key: RemoteKey) -> Bool {
         switch key {
         case .up: settingsIndex = max(0, settingsIndex - 1)
-        case .down: settingsIndex = min(1, settingsIndex + 1)
-        case .select, .left, .right: persistSetting(settingsIndex)
+        case .down: settingsIndex = min(2, settingsIndex + 1)
+        case .select, .right: persistSetting(settingsIndex, direction: 1)
+        case .left: persistSetting(settingsIndex, direction: -1)
         case .menu: closeModal()
         default: break
         }

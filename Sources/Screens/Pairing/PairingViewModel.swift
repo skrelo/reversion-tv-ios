@@ -58,7 +58,11 @@ final class PairingViewModel: ObservableObject {
             pollSeconds = minted.pollInterval ?? Self.defaultPollSeconds
             code = minted.code
             status = ""
-            qr = QRCodeGenerator.image(from: minted.code)
+            // QR encodes the FULL activation URL (not the bare code) so a normal
+            // phone camera lands on the web activate page with the code prefilled
+            // (§5 — encoding the bare code only worked with the mobile app's
+            // in-app scanner; an Amazon review rejection).
+            qr = QRCodeGenerator.image(from: "https://reversion.app/activate?code=\(minted.code)")
             secondsLeft = minted.expiresIn ?? Self.defaultTTL
 
             let regenerate = await pollAndCountdown(onAuthorized: onAuthorized)

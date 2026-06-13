@@ -22,6 +22,8 @@ struct RootView: View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             switch router.root {
+            case .welcome:
+                WelcomeView()
             case .pairing:
                 PairingView()
             case .home:

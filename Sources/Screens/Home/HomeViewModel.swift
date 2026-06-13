@@ -14,6 +14,7 @@ final class HomeViewModel: ObservableObject {
     @Published var rails: [HomeRail] = []
     @Published var profileName = "Account"
     @Published var profileHandle = ""
+    @Published var profilePhotoUrl = ""
 
     /// Active catalog view (nil = default home).
     @Published var catalog: Catalog?
@@ -51,6 +52,7 @@ final class HomeViewModel: ObservableObject {
             if let user = meRes?.user {
                 profileName = user.preferredLabel
                 profileHandle = user.telegramHandle ?? ""
+                profilePhotoUrl = user.profilePhotoUrl ?? ""
             }
 
             // Hero fallback = first recent event wrapped as a featured item.
