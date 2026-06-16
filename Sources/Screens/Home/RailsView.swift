@@ -227,21 +227,29 @@ struct CardView: View {
             .background(bg)
     }
 
-    @ViewBuilder
+    /// Fixed two-line height for the below-card text so cards stay the same
+    /// overall height whether they show one line (title only / date only) or
+    /// two (title + date). Without this, suppressing the duplicate date line
+    /// shrank some cards and the focus scale looked inconsistent across a rail.
+    private let belowTextHeight: CGFloat = 50
+
     private var belowText: some View {
         let title = item.isVideo ? (item.media.title ?? "") : ""
-        let meta = item.media.sessionDate ?? item.media.videoDate ?? ""
-        if !title.isEmpty || !meta.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                if !title.isEmpty {
-                    Text(title).font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Theme.text).lineLimit(1)
-                }
-                if !meta.isEmpty {
-                    Text(meta).font(.system(size: 18)).foregroundStyle(Theme.textDim).lineLimit(1)
-                }
+        let rawMeta = item.media.videoDate ?? item.media.sessionDate ?? ""
+        // Suppress the date line when the auto-derived title already includes
+        // that date (e.g. "Feb 27, 2026 - Part 1") so it isn't double-printed.
+        // Backend formats title + video_date/session_date with the same
+        // "M j, Y" pattern, so a substring check is reliable (HomeController).
+        let meta = (!rawMeta.isEmpty && title.contains(rawMeta)) ? "" : rawMeta
+        return VStack(alignment: .leading, spacing: 2) {
+            if !title.isEmpty {
+                Text(title).font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Theme.text).lineLimit(1)
             }
-            .frame(width: 360, alignment: .leading)
+            if !meta.isEmpty {
+                Text(meta).font(.system(size: 18)).foregroundStyle(Theme.textDim).lineLimit(1)
+            }
         }
+        .frame(width: 360, height: belowTextHeight, alignment: .topLeading)
     }
 }
