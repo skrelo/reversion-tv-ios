@@ -4,6 +4,15 @@ struct HomeView: View {
     @EnvironmentObject private var router: AppRouter
     @StateObject private var model = HomeViewModel()
 
+    /// tvOS keeps the app suspended in memory for long stretches and rarely
+    /// cold-launches, so the initial `.task` load can be days stale. Refresh
+    /// Home whenever the user lands on it (returns from a pushed screen) and
+    /// as a backstop when the app resumes — so newly-granted entitlements
+    /// (added on the web) show up without a relaunch. Backgrounding alone is
+    /// unreliable (often = TV powered off), so landing is the primary trigger.
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var lastRefresh = Date.distantPast
+
     @FocusState private var focus: HomeFocus?
     @State private var heroExpanded = true
     @State private var spotlight: SpotlightData?
@@ -44,7 +53,7 @@ struct HomeView: View {
 
     var body: some View {
         contentLayer
-        .task { if model.loading { await model.load() } }
+        .task { if model.loading { await model.load(); lastRefresh = Date() } }
         // Auto-advance every 8 s. Keyed on `focus` too, so moving between the
         // carousel's own buttons (Watch / My List / Info) RESTARTS the 8 s
         // clock instead of letting the slide flip out from under the user
@@ -58,6 +67,15 @@ struct HomeView: View {
                     slideIndex = (slideIndex + 1) % model.heroItems.count
                 }
             }
+        }
+        // Primary refresh: user lands back on Home from any pushed screen
+        // (video/detail/search/settings). Picks up entitlement/content changes.
+        .onChange(of: router.path) { oldValue, newValue in
+            if newValue.isEmpty && !oldValue.isEmpty { refreshHome() }
+        }
+        // Backstop: app resumes to active (e.g. switched apps and back).
+        .onChange(of: scenePhase) { _, newValue in
+            if newValue == .active { refreshHome() }
         }
         .onChange(of: focus) { oldValue, newValue in handleFocusChange(from: oldValue, to: newValue) }
         .onChange(of: model.loading) { _, isLoading in
@@ -310,6 +328,16 @@ struct HomeView: View {
         }
     }
 
+    /// Silent, throttled Home refresh. Skips the spinner/focus reset (no
+    /// `loading` toggle) and coalesces rapid triggers (path + scenePhase can
+    /// both fire on one return) so we don't double-hit the API.
+    private func refreshHome() {
+        guard !model.loading else { return }
+        guard Date().timeIntervalSince(lastRefresh) > 3 else { return }
+        lastRefresh = Date()
+        Task { await model.load(silent: true) }
+    }
+
     private func setInitialFocus() {
         guard !didInitialFocus else { return }
         didInitialFocus = true
@@ -386,6 +414,7 @@ struct HomeView: View {
             navOpen = false
             DispatchQueue.main.async { focus = model.heroItems.isEmpty ? focus : .heroWatch }
         case "search": router.push(.search)
+        case "mynotes": router.push(.myNotes)
         case "settings": router.push(.settings)
         case "meetups": navOpen = false; model.enterCatalog(.meetups); focusFirstRailOrNav()
         case "livestreams": navOpen = false; model.enterCatalog(.livestreams); focusFirstRailOrNav()

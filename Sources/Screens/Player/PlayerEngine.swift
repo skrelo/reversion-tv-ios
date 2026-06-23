@@ -32,6 +32,10 @@ final class PlayerEngine: ObservableObject {
     private var pendingResume: Double = 0
     private var pendingSpeed: Float = 1
     private var didApplyResume = false
+    /// True only once the resume seek has **landed** (or there was no resume to
+    /// apply). Gates the buffer-ready / playing fallbacks so they can't un-hide
+    /// the surface at 0:00 while the resume seek is still in flight.
+    private var resumeLanded = false
     private var legibleGroup: AVMediaSelectionGroup?
 
     init() {
@@ -54,7 +58,9 @@ final class PlayerEngine: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.isPlaying = p.timeControlStatus == .playing
-                if p.timeControlStatus == .playing { self.isLoading = false }
+                // Only clear loading once the resume seek has been applied — the
+                // player can briefly report .playing at 0:00 before we seek.
+                if p.timeControlStatus == .playing, self.resumeLanded { self.isLoading = false }
             }
         }
     }
@@ -70,6 +76,7 @@ final class PlayerEngine: ObservableObject {
     func load(url: URL, resume: Double, durationHint: Double, speed: Float) {
         isLoading = true
         didApplyResume = false
+        resumeLanded = false
         legibleGroup = nil
         hasCaptions = false
         pendingResume = resume
@@ -96,7 +103,10 @@ final class PlayerEngine: ObservableObject {
         likelyObs = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] it, _ in
             Task { @MainActor in
                 guard let self else { return }
-                if it.isPlaybackLikelyToKeepUp { self.isLoading = false }
+                // Don't un-hide the surface on buffer-ready until we've seeked to
+                // the resume position — otherwise the video flashes at 0:00 and
+                // then jumps when the resume seek lands (bad UX).
+                if it.isPlaybackLikelyToKeepUp, self.resumeLanded { self.isLoading = false }
             }
         }
         endObserver = NotificationCenter.default.addObserver(
@@ -127,12 +137,14 @@ final class PlayerEngine: ObservableObject {
                         guard let self else { return }
                         self.player.rate = speed
                         self.player.play()
+                        self.resumeLanded = true
                         self.isLoading = false
                     }
                 }
             } else {
                 player.rate = pendingSpeed
                 player.play()
+                resumeLanded = true
                 isLoading = false
             }
         }

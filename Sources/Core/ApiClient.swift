@@ -60,6 +60,9 @@ final class ApiClient {
 
     func library() async throws -> LibraryResponse { try await send(.get, "/library") }
 
+    /// `GET /my-notes` → all the user's notes grouped by video (§11.1).
+    func myNotes() async throws -> MyNotesResponse { try await send(.get, "/my-notes") }
+
     func me() async throws -> MeResponse { try await send(.get, "/me") }
 
     /// `GET /legal/{document}` → `{ title, html }` for the in-app legal reader

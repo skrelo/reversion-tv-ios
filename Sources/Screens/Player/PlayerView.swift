@@ -10,8 +10,8 @@ struct PlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var c: PlayerController
 
-    init(videoId: Int) {
-        _c = StateObject(wrappedValue: PlayerController(videoId: videoId))
+    init(videoId: Int, startSeconds: Int? = nil) {
+        _c = StateObject(wrappedValue: PlayerController(videoId: videoId, startSeconds: startSeconds))
     }
 
     var body: some View {
@@ -34,7 +34,7 @@ struct PlayerView: View {
                 )
                 .ignoresSafeArea()
 
-                if c.engine.isLoading { ProgressView().scaleEffect(2).tint(Theme.text) }
+                if c.engine.isLoading { loadingOverlay }
                 if let flash = c.flash { flashGlyph(flash) }
 
                 // Ambient popup — TOP-CENTER. Centering clears the chrome's
@@ -65,6 +65,25 @@ struct PlayerView: View {
                 // out by the scrim.
                 if c.pauseChromeVisible { pauseChrome }
 
+                // Peek control (§9.18) — persistent, FOCUSABLE top-RIGHT banner,
+                // sitting just under the icon row (Add note / Settings). Drawn
+                // ABOVE the chrome so the chrome's dim/scrim can't hide it: it
+                // stays visible whenever peeking — playing, paused, chrome up or
+                // down — so its position never changes. Top-right (not top-left)
+                // because the paused/chrome title block occupies the top-left.
+                // Focused via the `.peek` zone; SELECT resumes. The gold
+                // highlight only shows while the chrome is up (zones are only
+                // navigable then).
+                if c.peeking, c.peekResumeSeconds != nil, c.overlay == .none {
+                    PeekIndicatorView(
+                        timecode: c.peekResumeLabel,
+                        focused: c.controlsVisible && c.focusZone == .peek
+                    )
+                    .padding(.trailing, 80).padding(.top, 160)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity)
+                }
+
                 overlayLayer
 
                 if let banner = c.saveBanner {
@@ -76,6 +95,7 @@ struct PlayerView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: c.controlsVisible)
         .animation(.easeOut(duration: 0.2), value: c.popupMarker)
+        .animation(.easeOut(duration: 0.2), value: c.peeking)
         // BACK is handled here, not in the UIKit receiver: only `.onExitCommand`
         // reliably suppresses the NavigationStack's default pop on tvOS. If the
         // controller says the press was absorbed (overlay closed, chrome hidden),
@@ -110,6 +130,16 @@ struct PlayerView: View {
                 Spacer()
             }
             .padding(.leading, 90)
+        }
+    }
+
+    // Shown over a black surface until the stream is ready AND the resume seek
+    // has landed (§9.2) — so the video never flashes at 0:00 and then jumps to
+    // the saved position.
+    private var loadingOverlay: some View {
+        VStack(spacing: 24) {
+            ProgressView().scaleEffect(2).tint(Theme.text)
+            Text("Loading…").font(.system(size: 26, weight: .medium)).foregroundStyle(Theme.textDim)
         }
     }
 
@@ -330,6 +360,7 @@ struct PlayerView: View {
         case "restart": return "gobackward"
         case "playpause": return c.engine.isPlaying ? "pause.fill" : "play.fill"
         case "next": return "forward.end.fill"
+        case "resume", "undo": return "arrow.uturn.backward"
         default: return "captions.bubble"
         }
     }
@@ -338,7 +369,31 @@ struct PlayerView: View {
         case "restart": return "Restart"
         case "playpause": return c.engine.isPlaying ? "Pause" : "Play"
         case "next": return "Next video"
+        case "resume": return "Resume \(c.peekResumeLabel)"
+        case "undo": return "Undo"
         default: return c.engine.captionsOn ? "Subtitles on" : "Subtitles"
         }
+    }
+}
+
+/// Non-destructive note peek control (§9.18). A persistent top-RIGHT pill (under
+/// the icon row) shown the whole time a peek is active — playing, paused, chrome
+/// up or down — so the cue never moves. Top-right because the paused/chrome title
+/// block owns the top-left. It is **focusable + selectable** (the `.peek` focus
+/// zone): when focused it highlights gold, and SELECT jumps back to the
+/// preserved position.
+struct PeekIndicatorView: View {
+    let timecode: String
+    var focused: Bool = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.uturn.backward").font(.system(size: 20))
+            Text("Resume at \(timecode)").font(.system(size: 22, weight: .semibold))
+        }
+        .foregroundStyle(focused ? Theme.bg : Theme.text)
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(Capsule().fill(focused ? Theme.gold : Color.black.opacity(0.6)))
+        .overlay(Capsule().stroke(focused ? Theme.gold : Theme.gold.opacity(0.7), lineWidth: focused ? 2 : 1))
     }
 }

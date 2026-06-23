@@ -3,7 +3,10 @@ import Combine
 
 /// Chrome focus zones (§9.3). Top → bottom: icon row, markers strip, scrub
 /// bar, transport pills.
-enum FocusZone { case icons, markers, scrub, pills }
+/// `peek` is the focusable "Resume at {timecode}" banner, present only while a
+/// note peek is active (§9.18); it sits between the icon row and the markers
+/// strip in the vertical chain.
+enum FocusZone { case icons, peek, markers, scrub, pills }
 
 /// One modal layer at a time (§9.15). BACK unwinds inside-out.
 enum PlayerOverlay { case none, settings, detail, image, text, qr, upnextPanel, chapters }
@@ -40,6 +43,11 @@ final class PlayerController: ObservableObject {
     private let seekTiers: [Double] = [600, 1000, 1400, 1800]
     private let seekIndicatorFadeMs: Double = 600
     private let detailBodyClamp = 280
+    // Note peek (§9.18) — mirror the mobile constants.
+    private let peekAutocommitSec: Double = 300   // 5 min real playback → auto-commit
+    private let peekUndoMs: Double = 5_000        // "Saved your spot · Undo" window
+    private let peekEdgeStartSec = 5              // saved spot < 5 s from start → no Resume
+    private let peekEdgeEndSec = 15.0            // saved spot within 15 s of end → no Resume
 
     let engine = PlayerEngine()
 
@@ -49,6 +57,11 @@ final class PlayerController: ObservableObject {
     @Published var chapters: [Chapter] = []
     @Published var error: String?
     @Published private(set) var videoId: Int
+
+    /// When set (jump-to-note from My Notes, §11.4), overrides the saved
+    /// resume point so playback starts at this exact timecode. One-shot:
+    /// cleared after the first load so a later same-video reload still resumes.
+    private var startSeconds: Int?
 
     // ── Chrome / focus ──
     @Published var controlsVisible = false
@@ -95,6 +108,20 @@ final class PlayerController: ObservableObject {
     @Published var notePopups = Prefs.notePopups
     @Published var sessionSpeed: Double = Prefs.playbackSpeed
 
+    // ── Note peek (non-destructive jump, §9.18) ──
+    /// True while a note jump is being previewed. Saved progress is FROZEN
+    /// (`saveProgress` early-returns) so reviewing a note never clobbers the
+    /// real watch position.
+    @Published var peeking = false
+    /// The preserved real position to return to (shown on the Resume control).
+    @Published var peekResumeSeconds: Int?
+    /// Non-nil for ~5 s after an auto-commit — drives the "Saved your spot ·
+    /// Undo" affordance. Holds the position to restore if the user taps Undo.
+    @Published var peekUndoRestore: Int?
+    private var peekClock: Timer?
+    private var peekPlayed = 0
+    private var peekUndoWork: DispatchWorkItem?
+
     static let speedSteps: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     // ── Internal refs / timers ──
@@ -130,6 +157,9 @@ final class PlayerController: ObservableObject {
     private var pills: [String] {
         var p = ["restart", "playpause"]
         if payload?.nextVideo?.id != nil { p.append("next") }
+        // Resume is NOT a pill — it's the focusable top-right banner (.peek zone,
+        // §9.18). Undo is a transient pill shown for ~5 s after an auto-commit.
+        if peekUndoRestore != nil { p.append("undo") }
         return p
     }
 
@@ -143,8 +173,9 @@ final class PlayerController: ObservableObject {
         return b
     }
 
-    init(videoId: Int) {
+    init(videoId: Int, startSeconds: Int? = nil) {
         self.videoId = videoId
+        self.startSeconds = startSeconds
         // Re-publish engine changes so the view re-renders on time ticks etc.
         engine.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -176,10 +207,12 @@ final class PlayerController: ObservableObject {
     }
 
     func teardown() {
-        saveProgress(engine.currentTime)
+        saveProgress(engine.currentTime)   // frozen while peeking — preserves the real spot
         loadTask?.cancel()
         saveTimer?.invalidate()
         seekTimer?.invalidate()
+        peekClock?.invalidate()
+        peekUndoWork?.cancel()
         engine.stop()
     }
 
@@ -192,6 +225,8 @@ final class PlayerController: ObservableObject {
         markers = []
         chapters = []
         popupMarker = nil
+        cancelPeekQuietly()
+        peekUndoRestore = nil
 
         let vid = videoId
         loadTask?.cancel()
@@ -207,13 +242,25 @@ final class PlayerController: ObservableObject {
                     self.error = "This video is unavailable (no stream URL)."
                     return
                 }
-                let resume = Double(p.progressSeconds ?? 0)
+                // Jump-to-note (My Notes deep-link, §11.4) overrides the saved
+                // resume point; it's a one-shot so a later reload of the same
+                // video resumes normally.
+                let noteSeek = self.startSeconds
+                self.startSeconds = nil
+                let savedProgress = p.progressSeconds ?? 0
+                let resume = Double(noteSeek ?? savedProgress)
                 self.seedFiredKeys(before: resume)
                 self.engine.load(url: url,
                                  resume: resume,
                                  durationHint: Double(p.durationSeconds ?? 0),
                                  speed: Float(Prefs.playbackSpeed))
                 self.loadNotes(annotations: p.annotations ?? [])
+                // Non-destructive peek (§9.18): deep-linked onto a note over real
+                // progress → freeze progress and offer Resume back. Duration is
+                // unknown here, so the end-of-video guard is re-checked each tick.
+                if let ns = noteSeek, self.shouldOfferResume(savedProgress, target: ns) {
+                    self.enterPeek(resume: savedProgress, persist: false)
+                }
             } catch {
                 if Task.isCancelled { return }
                 if (error as? ApiError)?.status == 401 { self.onExit?(); return }
@@ -244,6 +291,9 @@ final class PlayerController: ObservableObject {
     // MARK: - Progress (§9.13)
 
     private func saveProgress(_ seconds: Double) {
+        // §9.18: while peeking a note, freeze progress so the preview never
+        // overwrites the user's real saved position.
+        guard !peeking else { return }
         let s = Int(seconds)
         guard s >= 1, s != lastSavedSecond else { return }
         lastSavedSecond = s
@@ -257,6 +307,122 @@ final class PlayerController: ObservableObject {
         let vid = videoId
         Task { try? await ApiClient.shared.saveProgress(videoId: vid, seconds: Int(dur)) }
     }
+
+    // MARK: - Note peek (non-destructive jump & Resume, §9.18)
+
+    /// Decide whether a "Resume at" peek is worth offering for a saved position.
+    /// Skipped when never played, within a few seconds of the start/end, or
+    /// effectively the same spot we're jumping to. The end check needs duration;
+    /// at deep-link time it may still be 0, so it's re-validated each tick
+    /// (`handleTick`) once the real duration is known.
+    private func shouldOfferResume(_ resumeSec: Int, target: Int? = nil) -> Bool {
+        guard resumeSec > 0 else { return false }
+        if resumeSec < peekEdgeStartSec { return false }
+        let dur = total
+        if dur > 0, Double(resumeSec) >= dur - peekEdgeEndSec { return false }
+        if let t = target, abs(resumeSec - t) <= 2 { return false }
+        return true
+    }
+
+    /// Enter peek. `persist` force-saves the preserved position first (in-player
+    /// "Go to", where the DB may be a few seconds stale); the deep-link path
+    /// passes false because the DB already holds it (§9.18).
+    private func enterPeek(resume: Int, persist: Bool) {
+        if persist { lastSavedSecond = -1; saveProgress(Double(resume)) } // peeking still false
+        peekUndoRestore = nil
+        peekResumeSeconds = resume
+        peeking = true
+        startPeekClock()
+    }
+
+    /// Resume control → jump the playhead back to the preserved position.
+    func resumeFromPeek() {
+        guard let s = peekResumeSeconds else { return }
+        stopPeekClock()
+        peeking = false
+        peekResumeSeconds = nil
+        engine.seek(to: Double(s))
+        clampPill()
+        showControls(.pills)
+    }
+
+    /// End the peek; the current position becomes the new saved progress. Per
+    /// §9.18 the ONLY trigger is the 5-min continuous-watch auto-commit —
+    /// scrubbing and dismissing do NOT commit.
+    private func commitPeek() {
+        guard peeking else { return }
+        stopPeekClock()
+        peeking = false
+        peekResumeSeconds = nil
+        saveProgress(engine.currentTime)
+        clampPill()
+        redirectFocusOffPeek()
+    }
+
+    /// Drop the peek without touching playback (the saved spot turned out not to
+    /// be worth returning to once duration was known).
+    private func cancelPeekQuietly() {
+        stopPeekClock()
+        peeking = false
+        peekResumeSeconds = nil
+        clampPill()
+        redirectFocusOffPeek()
+    }
+
+    /// If focus is sitting on the (now-gone) Resume banner, move it to a still-
+    /// valid zone so the user isn't stranded on an invisible control.
+    private func redirectFocusOffPeek() {
+        guard focusZone == .peek else { return }
+        focusZone = !markers.isEmpty ? .markers : .scrub
+    }
+
+    /// 5 min of real playback → commit + offer Undo for a few seconds.
+    private func autoCommitPeek() {
+        let restore = peekResumeSeconds
+        commitPeek()
+        peekUndoRestore = restore
+        showBanner("Saved your spot")
+        showControls()   // reveal chrome so the transient Undo pill is reachable
+        peekUndoWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.peekUndoRestore = nil; self?.clampPill() }
+        peekUndoWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + peekUndoMs / 1000, execute: work)
+    }
+
+    /// Undo an auto-commit → restore the old saved position and re-enter peek.
+    func undoPeekCommit() {
+        guard let restore = peekUndoRestore else { return }
+        peekUndoWork?.cancel()
+        peekUndoRestore = nil
+        enterPeek(resume: restore, persist: true)   // writes the old spot back to the DB
+        showControls(.pills)
+    }
+
+    private func startPeekClock() {
+        stopPeekClock()
+        peekPlayed = 0
+        peekClock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.peeking else { self.stopPeekClock(); return }
+                guard self.engine.isPlaying else { return }   // count real playback only
+                self.peekPlayed += 1
+                if Double(self.peekPlayed) >= self.peekAutocommitSec { self.autoCommitPeek() }
+            }
+        }
+    }
+
+    private func stopPeekClock() {
+        peekClock?.invalidate(); peekClock = nil; peekPlayed = 0
+    }
+
+    /// Keep `pillIndex` valid when the pills array shrinks (Resume/Undo removed).
+    private func clampPill() {
+        let count = pills.count
+        if pillIndex >= count { pillIndex = max(0, count - 1) }
+    }
+
+    var peekResumeLabel: String { peekResumeSeconds.map { Html.timecode(Double($0)) } ?? "" }
 
     // MARK: - Auto-hide
 
@@ -326,6 +492,9 @@ final class PlayerController: ObservableObject {
     /// (§9.5). The repeating timer replaces the browser key-repeat the web port
     /// relies on (tvOS sends one press, not repeats).
     private func startSeek(_ dir: Int) {
+        // §9.18: scrubbing while peeking is part of reviewing the note — it must
+        // NOT commit. Saving stays frozen and the Resume control stays put; only
+        // selecting Resume or the 5-min auto-commit ends the peek.
         seekTimer?.invalidate()
         seekHold = (dir, Date())
         seekTick(dir)
@@ -387,6 +556,7 @@ final class PlayerController: ObservableObject {
             firedPopupKeys = []
             showControls(.pills)
         case "playpause": togglePlay(); armHide()
+        case "undo": undoPeekCommit()
         case "next": advanceNext()
         case "cc": engine.toggleCaptions(); armHide()
         default: break
@@ -591,6 +761,9 @@ final class PlayerController: ObservableObject {
     // MARK: - Per-tick (pop-ups + Up-Next windowing)
 
     private func handleTick(_ t: Double) {
+        // Re-validate the peek now that duration may be known: drop the Resume
+        // if the preserved spot turns out to be within the end window (§9.18).
+        if peeking, let r = peekResumeSeconds, !shouldOfferResume(r) { cancelPeekQuietly() }
         maybePopup(t)
         guard Prefs.autoplayNext, payload?.nextVideo?.id != nil,
               engine.duration > 0, !upNextDismissed, overlay == .none else {
@@ -710,16 +883,27 @@ final class PlayerController: ObservableObject {
             switch key {
             case .left: iconIndex = max(0, iconIndex - 1)
             case .right: iconIndex = min(iconButtons.count - 1, iconIndex + 1)
-            case .down: if hasMarkers { enterMarkers() } else { focusZone = .scrub }
-            case .up: controlsVisible = false; clearHide()
+            case .down:
+                if peeking { focusZone = .peek }
+                else if hasMarkers { enterMarkers() } else { focusZone = .scrub }
+            case .up: break // §9.3: ceiling is a HARD STOP — never hide the chrome.
             case .select: activateIcon()
+            default: break
+            }
+        case .peek:
+            // The focusable Resume banner (§9.18). UP → icons; DOWN → markers/
+            // scrub; SELECT jumps back to the preserved position.
+            switch key {
+            case .up: focusZone = .icons
+            case .down: if hasMarkers { enterMarkers() } else { focusZone = .scrub }
+            case .select: resumeFromPeek()
             default: break
             }
         case .markers:
             switch key {
             case .left: markerIndex = max(0, markerIndex - 1)
             case .right: markerIndex = min(markers.count - 1, markerIndex + 1)
-            case .up: focusZone = .icons
+            case .up: focusZone = peeking ? .peek : .icons
             case .down: focusZone = .scrub
             case .select:
                 // §9.6: do NOT auto-seek on open — the jump is an explicit press
@@ -733,7 +917,9 @@ final class PlayerController: ObservableObject {
             case .right: startSeek(1)
             case .select: togglePlay()
             case .down: focusZone = .pills
-            case .up: if hasMarkers { enterMarkers() } else { focusZone = .icons }
+            case .up:
+                if hasMarkers { enterMarkers() }
+                else if peeking { focusZone = .peek } else { focusZone = .icons }
             default: break
             }
         case .pills:
@@ -742,7 +928,7 @@ final class PlayerController: ObservableObject {
             case .right: pillIndex = min(pills.count - 1, pillIndex + 1)
             case .select: activatePill()
             case .up: focusZone = .scrub
-            case .down: controlsVisible = false; clearHide()
+            case .down: break // §9.3: floor is a HARD STOP — never hide the chrome.
             default: break
             }
         }
@@ -811,7 +997,17 @@ final class PlayerController: ObservableObject {
             case "goto":
                 // §9.8: jump the playhead to the marker, then close (closeModal
                 // resumes playback if the video was playing before the card).
-                if let m = activeMarker { engine.seek(to: m.startsAt) }
+                // For a NOTE the jump is a non-destructive peek (§9.18); for an
+                // annotation (coach content) it seeks directly.
+                if let m = activeMarker {
+                    if m.isNote {
+                        let from = Int(engine.currentTime)
+                        if shouldOfferResume(from, target: Int(m.startsAt)) {
+                            enterPeek(resume: from, persist: true)
+                        }
+                    }
+                    engine.seek(to: m.startsAt)
+                }
                 closeModal()
             case "readmore": overlay = .text
             case "edit":

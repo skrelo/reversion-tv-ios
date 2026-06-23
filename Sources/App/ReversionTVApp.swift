@@ -47,10 +47,14 @@ struct RootView: View {
             EventDetailView(eventId: id, title: title)
         case let .player(videoId):
             PlayerView(videoId: videoId)
+        case let .playerAt(videoId, seconds):
+            PlayerView(videoId: videoId, startSeconds: seconds)
         case .search:
             SearchView()
         case .settings:
             SettingsView()
+        case .myNotes:
+            MyNotesView()
         }
     }
 }

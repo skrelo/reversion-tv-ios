@@ -7,8 +7,11 @@ import SwiftUI
 enum Route: Hashable {
     case eventDetail(id: Int, title: String?)
     case player(videoId: Int)
+    /// Player opened at a specific timecode (jump-to-note from My Notes, §11.4).
+    case playerAt(videoId: Int, seconds: Int)
     case search
     case settings
+    case myNotes
 }
 
 @MainActor

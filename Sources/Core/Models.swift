@@ -140,6 +140,43 @@ struct LegalResponse: Decodable {
     let html: String?
 }
 
+// MARK: - My Notes (§11)
+
+/// `GET /my-notes` → all the user's notes, grouped by video, presentation-ready.
+/// The server does all grouping / sorting / formatting (§11.1).
+struct MyNotesResponse: Decodable {
+    let data: [MyNotesGroup]?
+}
+
+/// One video's worth of notes. Groups arrive sorted by `latestNoteAt` desc;
+/// `notes` arrive sorted ascending by `seconds`.
+struct MyNotesGroup: Decodable, Identifiable {
+    let videoId: Int
+    let videoTitle: String?
+    let sessionDate: String?
+    let eventId: Int?
+    let eventTitle: String?
+    let posterUrl: String?
+    let cardPosterUrl: String?
+    let notesCount: Int?
+    let latestNoteAt: String?
+    let notes: [MyNote]?
+
+    var id: Int { videoId }
+    var count: Int { notesCount ?? notes?.count ?? 0 }
+}
+
+/// A single note row inside a `MyNotesGroup`. `timecode` is preformatted
+/// (e.g. `12:04`); `excerpt` is HTML-stripped and ≤140 chars (§11.1).
+struct MyNote: Decodable, Identifiable {
+    let id: Int
+    let seconds: Int?
+    let timecode: String?
+    let title: String?
+    let excerpt: String?
+    let updatedAt: String?
+}
+
 struct User: Decodable {
     let id: Int?
     let name: String?

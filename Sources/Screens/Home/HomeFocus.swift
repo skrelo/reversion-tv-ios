@@ -31,6 +31,7 @@ enum Nav {
         .init(id: "livestreams", label: "Livestreams", systemImage: "dot.radiowaves.left.and.right"),
         .init(id: "continue", label: "Continue Watching", systemImage: "play.circle.fill"),
         .init(id: "mylist", label: "My List", systemImage: "bookmark.fill"),
+        .init(id: "mynotes", label: "My Notes", systemImage: "square.and.pencil"),
     ]
     static let settings = NavItemSpec(id: "settings", label: "Settings", systemImage: "gearshape.fill")
 }
