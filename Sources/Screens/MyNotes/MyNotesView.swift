@@ -20,6 +20,10 @@ struct MyNotesView: View {
     @State private var query = ""
     /// True while the tvOS system keyboard is presented for the search field.
     @State private var keyboardActive = false
+    /// Focus captured right before pushing the player, so it can be restored
+    /// when this screen reappears (after a pop `@FocusState` is nil — see
+    /// `restoreFocusOnReturn`).
+    @State private var focusBeforePush: MyNotesFocus?
 
     private var modalOpen: Bool { pendingDelete != nil }
 
@@ -37,7 +41,10 @@ struct MyNotesView: View {
             }
         }
         .task { await vm.initialLoadIfNeeded(); arriveInitialFocus() }
-        .onAppear { vm.refreshOnReturn() }
+        .onAppear {
+            vm.refreshOnReturn()
+            if didInit { restoreFocusOnReturn() }
+        }
         .onChange(of: focus) { _, f in
             if case let .group(i) = f { selected = i }
         }
@@ -262,9 +269,9 @@ struct MyNotesView: View {
             .background(RoundedRectangle(cornerRadius: 14)
                 .fill(isFocused ? Theme.gold : (isSelected ? Color.white.opacity(0.08) : .clear)))
         }
-        .buttonStyle(NavButtonStyle())
-        .focusable(!modalOpen)
-        .focused($focus, equals: .group(i))
+            .buttonStyle(NavButtonStyle())
+            .disabled(modalOpen)
+            .focused($focus, equals: .group(i))
         .onMoveCommand { dir in
             switch dir {
             case .up: focus = i > 0 ? .group(i - 1) : .search
@@ -318,7 +325,7 @@ struct MyNotesView: View {
                         .fill(focus == .playFromStart ? Theme.gold : Color.white.opacity(0.12)))
                 }
                 .buttonStyle(NavButtonStyle())
-                .focusable(paneActive)
+                .disabled(modalOpen)
                 .focused($focus, equals: .playFromStart)
                 .onMoveCommand { dir in
                     switch dir {
@@ -364,7 +371,7 @@ struct MyNotesView: View {
                     .fill(isFocused ? Theme.gold : Color.white.opacity(0.05)))
             }
             .buttonStyle(NavButtonStyle())
-            .focusable(paneActive)
+            .disabled(modalOpen)
             .focused($focus, equals: .note(i))
             .onMoveCommand { dir in
                 switch dir {
@@ -384,7 +391,7 @@ struct MyNotesView: View {
                         .fill(delFocused ? Theme.gold : Color.white.opacity(0.05)))
             }
             .buttonStyle(NavButtonStyle())
-            .focusable(paneActive)
+            .disabled(modalOpen)
             .focused($focus, equals: .noteDelete(i))
             .onMoveCommand { dir in
                 switch dir {
@@ -431,7 +438,7 @@ struct MyNotesView: View {
                                 .fill(focus == .cancelDelete ? Theme.gold : Color.white.opacity(0.14)))
                     }
                     .buttonStyle(NavButtonStyle())
-                    .focusable(modalOpen)
+                    .disabled(!modalOpen)
                     .focused($focus, equals: .cancelDelete)
                     .onMoveCommand { if $0 == .right { focus = .confirmDelete } }
 
@@ -446,7 +453,7 @@ struct MyNotesView: View {
                             .fill(focus == .confirmDelete ? Color(red: 0.78, green: 0.22, blue: 0.22) : Color.white.opacity(0.10)))
                     }
                     .buttonStyle(NavButtonStyle())
-                    .focusable(modalOpen)
+                    .disabled(!modalOpen)
                     .focused($focus, equals: .confirmDelete)
                     .onMoveCommand { if $0 == .left { focus = .cancelDelete } }
                 }
@@ -479,17 +486,6 @@ struct MyNotesView: View {
         return s
     }
 
-    /// `paneActive` derives from focus so the right-pane controls are focusable
-    /// ONLY while focus already lives there — a geometric RIGHT from a group row
-    /// has nothing to grab and `enterNotes`'s explicit set is the only move (no
-    /// snap flicker). Same trick as Settings §10.6.
-    private var paneActive: Bool {
-        switch focus {
-        case .playFromStart, .note, .noteDelete: return true
-        default: return false
-        }
-    }
-
     private func arriveInitialFocus() {
         guard !didInit, !vm.groups.isEmpty else {
             if vm.groups.isEmpty { DispatchQueue.main.async { focus = vm.error != nil ? .retry : .empty } }
@@ -507,11 +503,48 @@ struct MyNotesView: View {
     }
 
     private func jumpTo(_ g: MyNotesGroup, _ n: MyNote) {
+        focusBeforePush = focus
         router.push(.playerAt(videoId: g.videoId, seconds: n.seconds ?? 0))
     }
 
     private func playFromStart(_ g: MyNotesGroup) {
+        focusBeforePush = focus
         router.push(.player(videoId: g.videoId))
+    }
+
+    /// On returning from the player, `@FocusState` is nil, so nothing is focused
+    /// and the screen looks frozen. Re-assign the focus we held before pushing
+    /// (validated against the current, possibly-refreshed data) so the user lands
+    /// back on their note.
+    private func restoreFocusOnReturn() {
+        let target = focusBeforePush
+        focusBeforePush = nil
+        DispatchQueue.main.async {
+            focus = validatedFocus(target ?? .group(selected))
+        }
+    }
+
+    /// Clamp a saved focus target to something that still exists after a refresh
+    /// (notes may have been deleted, or the group list may have changed).
+    private func validatedFocus(_ f: MyNotesFocus) -> MyNotesFocus {
+        guard !displayGroups.isEmpty else {
+            if vm.groups.isEmpty { return vm.error != nil ? .retry : .empty }
+            return .search
+        }
+        let idx = min(selected, displayGroups.count - 1)
+        let notes = displayGroups[idx].notes ?? []
+        switch f {
+        case .note(let i):
+            return notes.indices.contains(i) ? .note(i) : (notes.isEmpty ? .group(idx) : .note(0))
+        case .noteDelete(let i):
+            return notes.indices.contains(i) ? .noteDelete(i) : (notes.isEmpty ? .group(idx) : .note(0))
+        case .playFromStart:
+            return .playFromStart
+        case .search, .searchClear:
+            return f
+        default:
+            return .group(idx)
+        }
     }
 
     private func askDelete(_ g: MyNotesGroup, _ n: MyNote) {

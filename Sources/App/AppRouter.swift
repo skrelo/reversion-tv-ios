@@ -26,7 +26,9 @@ final class AppRouter: ObservableObject {
         root = KeychainTokenStore.isLoggedIn ? .home : .welcome
     }
 
-    func push(_ route: Route) { path.append(route) }
+    func push(_ route: Route) {
+        path.append(route)
+    }
     func popToRoot() { path.removeAll() }
 
     /// Welcome → Pairing (§5).

@@ -1,0 +1,41 @@
+---
+description: App Store release notes in a codeblock + keep docs/CHANGELOG.md current
+alwaysApply: true
+---
+
+# Release notes (codeblock) + changelog
+
+## Release notes must be in a codeblock
+
+Whenever the user asks for **App Store release notes** / "What's New" copy,
+output the final notes inside a single fenced **codeblock** so they can be copied
+straight into App Store Connect's textarea. No commentary inside the block.
+
+- Plain user language. No file paths, no spec section numbers (no `§11.6`), no
+  internal jargon (no "focus platter", "UITextField", "peek").
+- **Textarea-safe bullets:** prefix each line item with a literal `• ` (bullet +
+  space). Do **not** use Markdown `-`/`*` bullets or blank-line-separated
+  paragraphs in the codeblock — App Store Connect's textarea renders plain text,
+  and `• ` pastes cleanly as a visible bullet.
+- Short bullets, active voice ("New", "Now you can…", "Fixed").
+- It's fine to add a one-line note *outside* the codeblock (e.g. offer a shorter
+  variant); the copy-paste block itself stays clean.
+
+## Keep `docs/CHANGELOG.md` current
+
+`docs/CHANGELOG.md` is the source of truth for those release notes.
+
+- Append a bullet under **`## [Unreleased]`** whenever a user-facing tvOS change
+  ships (new feature, visible UI/UX change, user-noticeable bug fix). Group under
+  **Added / Changed / Fixed**. Skip invisible changes (refactors, build/tooling,
+  docs, tests).
+- When the user cuts a version (e.g. "new version is 1.1.0"), rename
+  `## [Unreleased]` to `## [<version>] — <YYYY-MM-DD>` and add a fresh empty
+  `## [Unreleased]` block on top. Don't rewrite historical version sections.
+- When asked for release notes for a version, pull them from that version's
+  changelog section so the store copy and the changelog match.
+
+## Scope
+
+- tvOS app only. Backend changes live in `reversion/`; the mobile app has its own
+  changelog in `reversion-app/docs/CHANGELOG.md`.
