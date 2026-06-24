@@ -15,6 +15,32 @@ final class MyNotesViewModel: ObservableObject {
 
     private(set) var loaded = false
 
+    /// Client-side note search (§11.6). Filters the already-loaded groups by a
+    /// case-insensitive match on the note `title`/`excerpt` and the group's
+    /// video/event title. A group whose title matches keeps all its notes; a
+    /// group kept only because some notes match is rebuilt with just those notes.
+    /// Empty query → everything.
+    func filteredGroups(_ rawQuery: String) -> [MyNotesGroup] {
+        let q = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return groups }
+        return groups.compactMap { g in
+            let titleHit = (g.videoTitle?.lowercased().contains(q) ?? false)
+                || (g.eventTitle?.lowercased().contains(q) ?? false)
+            if titleHit { return g }
+            let hits = (g.notes ?? []).filter { n in
+                (n.title?.lowercased().contains(q) ?? false)
+                    || (n.excerpt?.lowercased().contains(q) ?? false)
+            }
+            guard !hits.isEmpty else { return nil }
+            return MyNotesGroup(
+                videoId: g.videoId, videoTitle: g.videoTitle, sessionDate: g.sessionDate,
+                eventId: g.eventId, eventTitle: g.eventTitle, posterUrl: g.posterUrl,
+                cardPosterUrl: g.cardPosterUrl, notesCount: hits.count,
+                latestNoteAt: g.latestNoteAt, notes: hits
+            )
+        }
+    }
+
     /// First entry only — load with a spinner. Re-entry uses `refreshOnReturn`.
     func initialLoadIfNeeded() async {
         guard !loaded else { return }

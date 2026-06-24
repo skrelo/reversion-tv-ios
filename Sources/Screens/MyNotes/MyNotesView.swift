@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// My Notes (§11). Two-pane browse over the user's notes: left = video groups,
 /// right = the focused group's notes (header "Play from start" + note rows).
@@ -15,8 +16,17 @@ struct MyNotesView: View {
     @State private var selected = 0
     @State private var pendingDelete: PendingDelete?
     @State private var didInit = false
+    /// Note search query (§11.6) — filters the loaded groups client-side.
+    @State private var query = ""
+    /// True while the tvOS system keyboard is presented for the search field.
+    @State private var keyboardActive = false
 
     private var modalOpen: Bool { pendingDelete != nil }
+
+    /// Groups actually shown, after applying the §11.6 search filter.
+    private var displayGroups: [MyNotesGroup] { vm.filteredGroups(query) }
+    /// True when the user has notes but the current query matches none.
+    private var noMatches: Bool { !vm.groups.isEmpty && displayGroups.isEmpty }
 
     var body: some View {
         ZStack {
@@ -30,6 +40,22 @@ struct MyNotesView: View {
         .onAppear { vm.refreshOnReturn() }
         .onChange(of: focus) { _, f in
             if case let .group(i) = f { selected = i }
+        }
+        .onChange(of: query) { _, _ in
+            // Filtering can shrink/clear the list — keep `selected` in range and
+            // don't strand focus on a row that no longer exists.
+            if selected >= displayGroups.count { selected = max(0, displayGroups.count - 1) }
+            // While the keyboard is up, SwiftUI focus is parked on the field; don't
+            // yank it around as results filter live (it's restored on dismiss).
+            guard !keyboardActive else { return }
+            switch focus {
+            case .note, .noteDelete, .playFromStart:
+                focus = displayGroups.isEmpty ? .search : .group(selected)
+            case .group:
+                if displayGroups.isEmpty { focus = .search }
+                else { focus = .group(selected) }
+            default: break
+            }
         }
         .onExitCommand {
             if modalOpen { cancelDelete() }
@@ -103,20 +129,115 @@ struct MyNotesView: View {
     private var groupsColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("My Notes").font(.system(size: 40, weight: .bold)).foregroundStyle(Theme.text)
-                .padding(.leading, 16).padding(.bottom, 18)
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(vm.groups.enumerated()), id: \.element.id) { i, g in
-                            groupRow(i, g).id(i)
+                .padding(.leading, 16).padding(.bottom, 12)
+            searchField.padding(.leading, 16).padding(.trailing, 24).padding(.bottom, 14)
+            if noMatches {
+                noMatchState
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(displayGroups.enumerated()), id: \.element.id) { i, g in
+                                groupRow(i, g).id(i)
+                            }
                         }
                     }
-                }
-                .onChange(of: selected) { _, i in
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(i, anchor: .center) }
+                    .onChange(of: selected) { _, i in
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(i, anchor: .center) }
+                    }
                 }
             }
         }
+    }
+
+    // §11.6 search field — a FULLY CUSTOM field (not a SwiftUI TextField) so the
+    // tvOS focus "platter" (white box) never appears. It's a NavButtonStyle button
+    // (no platter) that we theme ourselves; selecting it presents the system
+    // keyboard (incl. dictation) via a hidden UIKit text field. RIGHT → clear (✕),
+    // DOWN → groups list.
+    private var searchField: some View {
+        let active = focus == .search || focus == .searchClear
+        return HStack(spacing: 16) {
+            Image(systemName: "magnifyingglass").font(.system(size: 24, weight: .medium))
+                .foregroundStyle(active ? Theme.gold : Theme.textDim)
+
+            Button(action: { keyboardActive = true }) {
+                Text(query.isEmpty ? "Search notes" : query)
+                    .font(.system(size: 26))
+                    .foregroundStyle(query.isEmpty ? Theme.textDim : Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(NavButtonStyle())
+            .focused($focus, equals: .search)
+            .onMoveCommand { dir in
+                switch dir {
+                case .down: if !displayGroups.isEmpty { focus = .group(min(selected, displayGroups.count - 1)) }
+                case .right: if !query.isEmpty { focus = .searchClear }
+                default: break
+                }
+            }
+
+            if !query.isEmpty {
+                Button(action: clearSearch) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 26))
+                }
+                .buttonStyle(ClearButtonStyle())
+                .focused($focus, equals: .searchClear)
+                .onMoveCommand { dir in
+                    switch dir {
+                    case .left: focus = .search
+                    case .down: if !displayGroups.isEmpty { focus = .group(min(selected, displayGroups.count - 1)) }
+                    default: break
+                    }
+                }
+            }
+        }
+        .frame(height: 64)
+        .padding(.horizontal, 22)
+        .background(
+            RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.45))
+                .overlay(RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(active ? Theme.gold : Color.white.opacity(0.12),
+                                  lineWidth: active ? 4 : 2))
+        )
+        .background(keyboardBridge)
+        .focusSection()
+        .disabled(modalOpen)
+    }
+
+    // Mounts a hidden UIKit text field only while editing; it becomes first
+    // responder to present the tvOS keyboard, mirrors typing back into `query`,
+    // and hands focus back to the field button when the keyboard is dismissed.
+    @ViewBuilder
+    private var keyboardBridge: some View {
+        if keyboardActive {
+            HiddenKeyboardField(text: $query) {
+                keyboardActive = false
+                DispatchQueue.main.async { focus = .search }
+            }
+            .frame(width: 1, height: 1)
+            .opacity(0.02)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func clearSearch() {
+        query = ""
+        DispatchQueue.main.async { focus = .search }
+    }
+
+    private var noMatchState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "magnifyingglass").font(.system(size: 44)).foregroundStyle(Theme.textDim)
+            Text("No notes match")
+                .font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.text)
+            Text("\u{201C}\(query.trimmingCharacters(in: .whitespacesAndNewlines))\u{201D}")
+                .font(.system(size: 20)).foregroundStyle(Theme.textDim)
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(.horizontal, 16)
     }
 
     private func groupRow(_ i: Int, _ g: MyNotesGroup) -> some View {
@@ -146,8 +267,8 @@ struct MyNotesView: View {
         .focused($focus, equals: .group(i))
         .onMoveCommand { dir in
             switch dir {
-            case .up: if i > 0 { focus = .group(i - 1) }
-            case .down: if i < vm.groups.count - 1 { focus = .group(i + 1) }
+            case .up: focus = i > 0 ? .group(i - 1) : .search
+            case .down: if i < displayGroups.count - 1 { focus = .group(i + 1) }
             case .right: enterNotes()
             default: break
             }
@@ -157,8 +278,8 @@ struct MyNotesView: View {
     // Right: focused group's notes.
     @ViewBuilder
     private var notesColumn: some View {
-        if vm.groups.indices.contains(selected) {
-            let g = vm.groups[selected]
+        if displayGroups.indices.contains(selected) {
+            let g = displayGroups[selected]
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
@@ -231,6 +352,7 @@ struct MyNotesView: View {
                                 .foregroundStyle(isFocused ? Theme.bg.opacity(0.85) : Theme.textDim)
                                 .lineLimit(2).multilineTextAlignment(.leading)
                         }
+                        if n.hasImage == true { imageBadge(isFocused) }
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "play.circle").font(.system(size: 24))
@@ -273,6 +395,19 @@ struct MyNotesView: View {
                 }
             }
         }
+    }
+
+    // §11.2 image badge — indicator only (no thumbnail, not enlargeable here;
+    // the image renders in the Player detail card §9.8 when the note is opened).
+    private func imageBadge(_ focused: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo").font(.system(size: 15, weight: .semibold))
+            Text("Image").font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(focused ? Theme.bg : Theme.gold)
+        .padding(.horizontal, 10).padding(.vertical, 4)
+        .background(Capsule().fill(focused ? Theme.bg.opacity(0.18) : Theme.gold.opacity(0.15)))
+        .padding(.top, 2)
     }
 
     // MARK: - Delete confirm modal (§11.4)
@@ -366,8 +501,8 @@ struct MyNotesView: View {
     }
 
     private func enterNotes() {
-        guard vm.groups.indices.contains(selected) else { return }
-        let notes = vm.groups[selected].notes ?? []
+        guard displayGroups.indices.contains(selected) else { return }
+        let notes = displayGroups[selected].notes ?? []
         focus = notes.isEmpty ? .playFromStart : .note(0)
     }
 
@@ -388,8 +523,8 @@ struct MyNotesView: View {
         let target = pendingDelete
         pendingDelete = nil
         // Restore focus to the trash button of the note we were about to delete.
-        if let t = target, vm.groups.indices.contains(selected),
-           let idx = (vm.groups[selected].notes ?? []).firstIndex(where: { $0.id == t.note.id }) {
+        if let t = target, displayGroups.indices.contains(selected),
+           let idx = (displayGroups[selected].notes ?? []).firstIndex(where: { $0.id == t.note.id }) {
             DispatchQueue.main.async { focus = .noteDelete(idx) }
         }
     }
@@ -410,11 +545,54 @@ struct MyNotesView: View {
             DispatchQueue.main.async { focus = .empty }
             return
         }
-        if selected >= vm.groups.count { selected = vm.groups.count - 1 }
-        let notes = vm.groups[selected].notes ?? []
+        if displayGroups.isEmpty {
+            DispatchQueue.main.async { focus = .search }
+            return
+        }
+        if selected >= displayGroups.count { selected = displayGroups.count - 1 }
+        let notes = displayGroups[selected].notes ?? []
         DispatchQueue.main.async {
             focus = notes.isEmpty ? .group(selected) : .note(0)
         }
+    }
+}
+
+/// Bridges to a UIKit `UITextField` purely to present the tvOS system keyboard
+/// (incl. dictation) for the custom search field, without SwiftUI's focus
+/// platter. Mounted only while editing; it becomes first responder on appear,
+/// mirrors edits into `text`, and calls `onEnd` when the keyboard is dismissed.
+struct HiddenKeyboardField: UIViewRepresentable {
+    @Binding var text: String
+    var onEnd: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField()
+        tf.text = text
+        tf.delegate = context.coordinator
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        tf.returnKeyType = .search
+        tf.autocorrectionType = .no
+        tf.clearButtonMode = .never
+        DispatchQueue.main.async { tf.becomeFirstResponder() }
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        context.coordinator.parent = self
+        if uiView.text != text { uiView.text = text }
+        if uiView.window != nil, !uiView.isFirstResponder {
+            DispatchQueue.main.async { uiView.becomeFirstResponder() }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: HiddenKeyboardField
+        init(_ parent: HiddenKeyboardField) { self.parent = parent }
+        @objc func editingChanged(_ tf: UITextField) { parent.text = tf.text ?? "" }
+        func textFieldDidEndEditing(_ tf: UITextField) { parent.onEnd() }
+        func textFieldShouldReturn(_ tf: UITextField) -> Bool { tf.resignFirstResponder(); return true }
     }
 }
 
@@ -428,6 +606,8 @@ struct PendingDelete: Identifiable {
 /// Single manual focus space for My Notes (§11.3). Left groups + right pane
 /// (header action, note rows, per-note trash) + modal + state placeholders.
 enum MyNotesFocus: Hashable {
+    case search
+    case searchClear
     case group(Int)
     case playFromStart
     case note(Int)

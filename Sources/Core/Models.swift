@@ -174,6 +174,7 @@ struct MyNote: Decodable, Identifiable {
     let timecode: String?
     let title: String?
     let excerpt: String?
+    let hasImage: Bool?
     let updatedAt: String?
 }
 
